@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "printbridge"
+version = "0.1.0"
+description = "Local network control for 3D printers of many brands (Bambu Lab, Creality, Klipper, Flashforge, Anycubic, Elegoo, Prusa) behind one interface"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.10"
+dependencies = [
+  "paho-mqtt>=2.0",        # Bambu Lab, Anycubic
+  "websocket-client>=1.7", # Creality, Elegoo
+  "pillow>=10",            # câmeras
+]
+keywords = ["3d-printing", "bambu-lab", "creality", "klipper", "moonraker", "flashforge", "anycubic", "elegoo", "prusa", "print-farm"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+  "Topic :: Printing",
+]
+
+[project.optional-dependencies]
+anycubic = ["cryptography>=41"]   # abrir as credenciais do Modo LAN
+video = ["aiortc>=1.9"]           # câmera WebRTC das Creality novas e H.264 (traz o PyAV)
+tudo = ["cryptography>=41", "aiortc>=1.9"]
+
+[tool.setuptools]
+packages = ["printbridge"]
