@@ -1,0 +1,439 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PrintBridge</title>
+<style>
+  :root {
+    --fundo: #f3f5f7; --cartao: #fff; --borda: #dde2e7; --texto: #18202a; --suave: #5d6875;
+    --cor: #2563eb; --cor-esc: #1d4ed8; --cor-clara: #dbe7fd;
+    --ok: #0f7b4b; --ok-fundo: #dcf3e6; --meio: #8a5a00; --meio-fundo: #fbefd2; --ruim: #a3261b; --ruim-fundo: #f9dedb;
+    --cinza-fundo: #e9edf1; --raio: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-tema="claro"]) {
+      --fundo: #10151b; --cartao: #182029; --borda: #2a3541; --texto: #e6ebf0; --suave: #97a3b0;
+      --cor: #5b8def; --cor-esc: #7aa3f3; --cor-clara: #1d2f4d;
+      --ok: #4cc98a; --ok-fundo: #133325; --meio: #e6b04a; --meio-fundo: #3a2c10; --ruim: #f07b6e; --ruim-fundo: #3d1a17; --cinza-fundo: #222c37;
+    }
+  }
+  :root[data-tema="escuro"] {
+    --fundo: #10151b; --cartao: #182029; --borda: #2a3541; --texto: #e6ebf0; --suave: #97a3b0;
+    --cor: #5b8def; --cor-esc: #7aa3f3; --cor-clara: #1d2f4d;
+    --ok: #4cc98a; --ok-fundo: #133325; --meio: #e6b04a; --meio-fundo: #3a2c10; --ruim: #f07b6e; --ruim-fundo: #3d1a17; --cinza-fundo: #222c37;
+  }
+  * { box-sizing: border-box }
+  body { margin: 0; background: var(--fundo); color: var(--texto); font: 15px/1.45 system-ui, "Segoe UI", Roboto, sans-serif }
+  body.embutido { background: transparent }
+  header { background: var(--cartao); border-bottom: 1px solid var(--borda) }
+  .topo { max-width: 1200px; margin: 0 auto; padding: 12px 16px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap }
+  .marca-app { font-weight: 800; font-size: 17px; flex: 1; display: flex; align-items: center; gap: 8px }
+  .marca-app svg { width: 24px; height: 24px }
+  main { max-width: 1200px; margin: 0 auto; padding: 16px }
+  body.embutido main { padding: 0 }
+  .grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px }
+  body.uma .grade { grid-template-columns: 1fr }
+  .cartao { background: var(--cartao); border: 1px solid var(--borda); border-radius: var(--raio); padding: 14px }
+  .linha { display: flex; gap: 8px; align-items: center; flex-wrap: wrap }
+  .cresce { flex: 1; min-width: 0 }
+  .suave { color: var(--suave); font-size: 13px }
+  .nome { font-weight: 700; font-size: 15.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+  button, .botao { font: inherit; font-weight: 600; font-size: 13.5px; border: 1px solid transparent; border-radius: 8px; padding: 7px 12px;
+    cursor: pointer; background: var(--cor); color: #fff; display: inline-flex; gap: 6px; align-items: center }
+  button:hover { background: var(--cor-esc) }
+  button.sec { background: transparent; color: var(--texto); border-color: var(--borda) }
+  button.sec:hover { background: var(--cinza-fundo) }
+  button.perigo { background: transparent; color: var(--ruim); border-color: var(--ruim) }
+  button.perigo:hover { background: var(--ruim-fundo) }
+  button:disabled { opacity: .45; cursor: not-allowed }
+  :focus-visible { outline: 2px solid var(--cor); outline-offset: 2px }
+  .selo { font-size: 12px; font-weight: 700; border-radius: 99px; padding: 2px 9px; white-space: nowrap }
+  .ok { background: var(--ok-fundo); color: var(--ok) } .meio { background: var(--meio-fundo); color: var(--meio) }
+  .ruim { background: var(--ruim-fundo); color: var(--ruim) } .cinza { background: var(--cinza-fundo); color: var(--suave) }
+  .barra { height: 6px; background: var(--cinza-fundo); border-radius: 6px; overflow: hidden; margin: 10px 0 4px }
+  .barra > div { height: 100%; background: var(--cor); transition: width .4s }
+  .camera { margin-top: 10px; aspect-ratio: 16/9; background: #0b0f14; border-radius: 8px; display: grid; place-items: center; overflow: hidden; position: relative }
+  .camera img { width: 100%; height: 100%; object-fit: contain }
+  .camera button { position: absolute; background: rgba(255,255,255,.12); color: #fff; border-color: rgba(255,255,255,.35) }
+  .camera button:hover { background: rgba(255,255,255,.22) }
+  .trabalho { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+  .temps { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px }
+  .temp { background: var(--cinza-fundo); border-radius: 8px; padding: 6px 8px; font-size: 13px }
+  .temp b { font-size: 16px }
+  .temp form { display: flex; gap: 4px; margin-top: 4px }
+  input, select, textarea { font: inherit; font-size: 14px; color: var(--texto); background: var(--cartao); border: 1px solid var(--borda); border-radius: 7px; padding: 6px 8px; width: 100% }
+  .temp input { padding: 3px 6px; font-size: 13px }
+  .temp button { padding: 3px 8px; font-size: 12px }
+  .acoes { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px }
+  .vazio { text-align: center; padding: 40px 16px }
+  .aviso { background: var(--meio-fundo); color: var(--meio); border-radius: 8px; padding: 8px 10px; font-size: 13px; margin-top: 10px }
+  .erro { background: var(--ruim-fundo); color: var(--ruim); border-radius: 8px; padding: 8px 10px; font-size: 13px; margin-top: 10px }
+  .sucesso { background: var(--ok-fundo); color: var(--ok); border-radius: 8px; padding: 8px 10px; font-size: 13px; margin-top: 10px }
+  /* janelas */
+  .fundo-modal { position: fixed; inset: 0; background: rgba(5, 10, 15, .55); display: flex; align-items: flex-start; justify-content: center; padding: 28px 12px; overflow: auto; z-index: 10 }
+  .modal { background: var(--cartao); border-radius: 14px; width: 100%; max-width: 700px; padding: 20px; box-shadow: 0 20px 60px rgba(0,0,0,.3) }
+  .modal h2 { font-size: 17px; margin: 0 }
+  .etapas { display: flex; gap: 5px; margin: 10px 0 16px } .etapas span { flex: 1; height: 4px; border-radius: 4px; background: var(--borda) } .etapas .feita { background: var(--cor) }
+  .marcas { display: grid; grid-template-columns: repeat(auto-fill, minmax(145px, 1fr)); gap: 8px }
+  .marca { text-align: left; background: var(--cartao); color: var(--texto); border: 1px solid var(--borda); padding: 12px; flex-direction: column; align-items: flex-start; gap: 6px }
+  .marca:hover { background: var(--cinza-fundo) }
+  .marca small { font-weight: 400; color: var(--suave); font-size: 12px }
+  ol.passos { list-style: none; padding: 0; margin: 0; counter-reset: p }
+  ol.passos li { counter-increment: p; display: flex; gap: 10px; padding: 7px 0; border-top: 1px dashed var(--borda) } ol.passos li:first-child { border-top: 0 }
+  ol.passos li::before { content: counter(p); flex: none; width: 22px; height: 22px; border-radius: 99px; background: var(--cor-clara); color: var(--cor); font-weight: 800; font-size: 12px; display: grid; place-items: center }
+  label { display: block; font-weight: 600; font-size: 13px; margin: 10px 0 3px }
+  .dica { font-size: 12px; color: var(--suave); margin-top: 2px }
+  .achada { width: 100%; background: var(--cartao); color: var(--texto); border: 1px solid var(--borda); margin-bottom: 5px; justify-content: space-between }
+  .achada:hover, .achada.on { border-color: var(--cor); background: var(--cor-clara) }
+  .rodape { display: flex; justify-content: space-between; gap: 8px; margin-top: 18px; flex-wrap: wrap }
+  pre { background: var(--cinza-fundo); border-radius: 8px; padding: 10px; font-size: 12px; overflow: auto; white-space: pre-wrap; word-break: break-all }
+  .girando { width: 13px; height: 13px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 99px; display: inline-block; animation: g .8s linear infinite; vertical-align: -2px }
+  @keyframes g { to { transform: rotate(360deg) } }
+  @media (max-width: 420px) { .grade { grid-template-columns: 1fr } }
+</style>
+</head>
+<body>
+<header id="cabecalho"><div class="topo">
+  <div class="marca-app"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 18h18M5 18V9l7-5 7 5v9M9 18v-5h6v5"/></svg>PrintBridge</div>
+  <button class="sec" id="btn-config">Configurações</button>
+  <button id="btn-adicionar">+ Adicionar impressora</button>
+</div></header>
+<main><div id="aviso-topo"></div><div class="grade" id="grade"><p class="suave">carregando…</p></div></main>
+<div id="modal"></div>
+
+<script>
+"use strict";
+// ---------- modo: painel completo (/) ou embutido (/embed?impressora=ID&controles=0&tema=escuro&token=…) ----------
+const Q = new URLSearchParams(location.search);
+const TOKEN = Q.get("token") || "";
+const EMBUTIDO = location.pathname === "/embed" || Q.get("embed") === "1";
+const SO = Q.get("impressora");                 // só esta impressora
+const CONTROLES = Q.get("controles") !== "0";   // 0 = só olhar
+if (Q.get("tema")) document.documentElement.dataset.tema = Q.get("tema") === "escuro" ? "escuro" : "claro";
+if (EMBUTIDO) { document.body.classList.add("embutido"); document.getElementById("cabecalho").remove(); }
+// dentro de um iframe que se ajusta à altura (printbridge.js), a barra de rolagem só atrapalha:
+// ela estreita a página, a câmera encolhe, a altura muda e o iframe fica pulando
+if (EMBUTIDO && window.parent !== window) document.documentElement.style.overflow = "hidden";
+if (SO) document.body.classList.add("uma");
+
+// tudo é montado com textContent: nomes que vêm da rede nunca viram HTML
+function el(tag, props, ...filhos) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (k === "class") e.className = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (v !== undefined && v !== null && v !== false) e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const f of filhos.flat(Infinity)) if (f !== null && f !== undefined && f !== false) e.append(f.nodeType ? f : String(f));
+  return e;
+}
+const comToken = (url) => TOKEN ? url + (url.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(TOKEN) : url;
+async function api(caminho, metodo = "GET", corpo) {
+  const cab = { "X-PrintBridge": "1" };
+  if (TOKEN) cab.Authorization = "Bearer " + TOKEN;
+  if (corpo !== undefined) cab["Content-Type"] = "application/json";
+  const r = await fetch("/api/" + caminho, { method: metodo, headers: cab, body: corpo === undefined ? undefined : JSON.stringify(corpo) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.erro || "erro " + r.status);
+  return d;
+}
+const maiuscula = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+
+// ---------- estado ao vivo ----------
+let MARCAS = [], IMPRESSORAS = [], LOCAL = false;
+const cameras = new Set();      // impressoras com o vídeo ligado
+const editando = new Set();     // campos de temperatura em uso: não redesenhar por cima
+const STATUS = { RUNNING: ["imprimindo", "ok"], PAUSE: ["pausada", "meio"], FINISH: ["terminou", "ok"], IDLE: ["livre", "cinza"],
+  FAILED: ["falhou", "ruim"], PREPARE: ["preparando", "meio"], SLICING: ["fatiando", "meio"], UNKNOWN: ["aguardando", "cinza"] };
+const VELOCIDADES = { 1: "Silencioso", 2: "Padrão", 3: "Esportivo", 4: "Turbo" };
+
+function receber(lista) {
+  IMPRESSORAS = SO ? lista.filter((p) => p.id === SO) : lista;
+  desenhar();
+}
+function ouvir() {
+  try {
+    const fonte = new EventSource(comToken("/api/eventos"));
+    fonte.addEventListener("impressoras", (e) => receber(JSON.parse(e.data)));
+    fonte.onerror = () => { fonte.close(); setTimeout(ouvir, 4000); };
+  } catch { setInterval(() => api("impressoras").then(receber).catch(() => {}), 3000); }
+}
+
+// ---------- cartões ----------
+const feitos = new Map();   // id → { chave (estado desenhado), el }
+let apertado = false, pendente = false;
+addEventListener("pointerdown", () => { apertado = true; });
+addEventListener("pointerup", () => { apertado = false; if (pendente) setTimeout(desenhar, 50); });
+const nomeMarca = (id) => (MARCAS.find((m) => (m.adaptador || m.id) === id) || {}).nome || id;
+function tempoRestante(min) { if (min == null) return ""; const h = Math.floor(min / 60); return h ? `${h}h${String(min % 60).padStart(2, "0")}` : `${min} min`; }
+
+function desenhar() {
+  const g = document.getElementById("grade");
+  const foco = document.activeElement?.dataset?.chave;
+  if (editando.size || apertado || document.activeElement?.tagName === "SELECT") { pendente = true; return; }  // digitando, clicando ou escolhendo
+  pendente = false;
+  if (!IMPRESSORAS.length) {
+    g.replaceChildren(el("div", { class: "cartao vazio" },
+      el("h2", { style: "margin:0 0 6px;font-size:17px" }, SO ? "Impressora não encontrada" : "Nenhuma impressora ainda"),
+      el("p", { class: "suave" }, SO ? "Confira o ID no endereço." : "Adicione a primeira: o PrintBridge mostra o passo a passo de cada marca."),
+      !SO && !EMBUTIDO && el("button", { onclick: abrirAssistente }, "+ Adicionar impressora")));
+    return;
+  }
+  // só refaz o cartão cujo estado mudou: um botão não some debaixo do mouse no meio do clique
+  const novos = IMPRESSORAS.map((p) => {
+    const chave = JSON.stringify([{ ...p, last_update: 0 }, cameras.has(p.id), CONTROLES]);  // last_update muda sempre: não conta
+    const velho = feitos.get(p.id);
+    if (velho && velho.chave === chave && velho.el.isConnected) return velho.el;
+    const e = cartao(p);
+    feitos.set(p.id, { chave, el: e });
+    return e;
+  });
+  if (novos.length !== g.children.length || novos.some((e, i) => g.children[i] !== e)) g.replaceChildren(...novos);
+  if (foco) document.querySelector(`[data-chave="${foco}"]`)?.focus();
+  avisarAltura();
+}
+
+function cartao(p) {
+  const tem = (r) => (p.recursos || []).includes(r);
+  const [txt, cls] = !p.connected ? ["sem conexão", "ruim"] : (STATUS[p.status] || [String(p.status).toLowerCase(), "cinza"]);
+  const ativa = ["RUNNING", "PAUSE", "PREPARE"].includes(p.status);
+  const cmd = (acao, valor, confirmar) => async () => {
+    if (confirmar && !confirm(confirmar)) return;
+    try { await api(`impressoras/${p.id}/comando`, "POST", { acao, valor }); } catch (e) { alert(maiuscula(e.message)); }
+  };
+  const partes = [
+    el("div", { class: "linha" },
+      el("div", { class: "cresce" }, el("div", { class: "nome", title: p.name }, p.name),
+        el("div", { class: "suave" }, `${nomeMarca(p.marca)} ${p.model || ""}${p.ip ? " · " + p.ip : ""}`)),
+      el("span", { class: "selo " + cls }, txt)),
+  ];
+  if (ativa || p.status === "FINISH") {
+    partes.push(el("div", { class: "barra" }, el("div", { style: `width:${Math.max(0, Math.min(100, p.progress || 0))}%` })),
+      el("div", { class: "suave linha", style: "flex-wrap:nowrap" }, el("span", { class: "trabalho", title: p.job || "" }, (p.job || "").split("/").pop()),
+        `${p.progress ?? 0}%`, p.layer != null && p.total_layers ? ` · camada ${p.layer}/${p.total_layers}` : "",
+        ativa && p.remaining_min != null ? ` · faltam ${tempoRestante(p.remaining_min)}` : ""));
+  }
+  if (tem("camera")) {
+    const ligada = cameras.has(p.id);
+    partes.push(el("div", { class: "camera" },
+      ligada && videoDe(p),
+      el("button", { style: ligada ? "top:8px;right:8px;padding:3px 8px;background:rgba(0,0,0,.55);border:0" : "",
+        onclick: () => { if (ligada) { cameras.delete(p.id); fecharVideo(p.id); } else cameras.add(p.id); desenhar(); } }, ligada ? "✕ fechar" : "▶ Ver câmera")));
+  }
+  if (tem("temperaturas") || p.nozzle_temp != null) {
+    const temp = (rotulo, atual, alvo, acao, max) => el("div", { class: "temp" },
+      rotulo, " ", el("b", {}, atual != null ? `${Math.round(atual)}°` : "–"), alvo ? el("span", { class: "suave" }, ` / ${Math.round(alvo)}°`) : "",
+      CONTROLES && tem("temperaturas") && p.connected && el("form", { onsubmit: (e) => { e.preventDefault(); const v = Number(e.target.v.value);
+          editando.delete(acao + p.id); if (v >= 0 && v <= max) cmd(acao, v)(); e.target.reset(); } },
+        el("input", { name: "v", type: "number", min: 0, max, placeholder: "°C", "aria-label": rotulo + " alvo", "data-chave": acao + p.id,
+          onfocus: () => editando.add(acao + p.id), onblur: () => setTimeout(() => { editando.delete(acao + p.id); }, 200) }),
+        el("button", { class: "sec" }, "ok")));
+    partes.push(el("div", { class: "temps" }, temp("Bico", p.nozzle_temp, p.nozzle_target, "set_nozzle", 300),
+      temp("Mesa", p.bed_temp, p.bed_target, "set_bed", 120)));
+  }
+  if (CONTROLES && p.connected) {
+    const acoes = [];
+    if (p.status === "RUNNING") acoes.push(el("button", { class: "sec", onclick: cmd("pause") }, "⏸ Pausar"));
+    if (p.status === "PAUSE") acoes.push(el("button", { onclick: cmd("resume") }, "▶ Continuar"));
+    if (ativa) acoes.push(el("button", { class: "perigo", onclick: cmd("stop", null, `Parar a impressão em "${p.name}"? Não dá para continuar depois.`) }, "■ Parar"));
+    if (tem("luz")) acoes.push(el("button", { class: "sec", onclick: cmd(p.light ? "light_off" : "light_on") }, p.light ? "Apagar luz" : "Acender luz"));
+    if (tem("velocidade") && ativa) acoes.push(el("select", { "aria-label": "Velocidade", style: "width:auto",
+      onchange: (e) => cmd("set_speed", Number(e.target.value))() },
+      Object.entries(VELOCIDADES).map(([n, t]) => el("option", { value: n, selected: Number(n) === p.speed_level }, t))));
+    if (tem("lote") && !ativa) acoes.push(botaoEnviar(p));
+    partes.push(el("div", { class: "acoes" }, acoes));
+  }
+  if (p.envio) {
+    const e = p.envio;
+    partes.push(e.etapa === "erro" ? el("div", { class: "erro" }, "Envio falhou: " + e.erro)
+      : e.etapa === "enviado" ? el("div", { class: "sucesso" }, `${e.arquivo} enviado — a impressão começa em instantes`)
+      : el("div", { class: "aviso" }, el("span", { class: "girando" }), ` enviando ${e.arquivo}… ${e.progresso}%`));
+  }
+  if (!EMBUTIDO && CONTROLES) {
+    partes.push(el("div", { class: "linha", style: "margin-top:10px;justify-content:flex-end" },
+      el("button", { class: "sec", style: "font-size:12px;padding:4px 8px", onclick: async () => {
+        const n = prompt("Novo nome:", p.name); if (n) await api(`impressoras/${p.id}/nome`, "POST", { nome: n }).catch((e) => alert(e.message)); } }, "Renomear"),
+      el("button", { class: "sec", style: "font-size:12px;padding:4px 8px", onclick: () => embutirModal(p) }, "Embutir"),
+      el("button", { class: "perigo", style: "font-size:12px;padding:4px 8px", onclick: async () => {
+        if (confirm(`Remover "${p.name}" do PrintBridge?`)) { await api(`impressoras/${p.id}`, "DELETE").catch((e) => alert(e.message)); cameras.delete(p.id); } } }, "Remover")));
+  }
+  return el("section", { class: "cartao", "aria-label": p.name }, partes);
+}
+
+// o mesmo <img> entre um redesenho e outro: recriar reconectaria o vídeo a cada 2 s
+const videos = new Map();
+function videoDe(p) {
+  if (!videos.has(p.id)) {
+    videos.set(p.id, el("img", { src: comToken(`/api/impressoras/${p.id}/camera.mjpeg`), alt: "Câmera de " + p.name,
+      onerror: (e) => { videos.delete(p.id); e.target.replaceWith(el("span", { class: "suave", style: "color:#cbd5e1" }, "câmera indisponível")); } }));
+  }
+  return videos.get(p.id);
+}
+function fecharVideo(id) { const v = videos.get(id); if (v) { v.src = ""; videos.delete(id); } }
+
+function botaoEnviar(p) {
+  const bambu = p.marca === "bambu";
+  const entrada = el("input", { type: "file", accept: bambu ? ".3mf" : ".gcode,.gco,.bgcode", style: "display:none",
+    onchange: async (e) => {
+      const f = e.target.files[0]; if (!f) return;
+      let slot = "";
+      if (bambu) {
+        const opcoes = (p.filamentos || []).map((x) => `${x.slot === 254 ? "Bobina externa" : "AMS " + (x.slot + 1)}${x.tipo ? " (" + x.tipo + ")" : ""} = ${x.slot}`);
+        const r = prompt("De onde sai o filamento? Digite o número:\n" + opcoes.join("\n"), String((p.filamentos || [])[0]?.slot ?? 254));
+        if (r === null) return; slot = "&slot=" + encodeURIComponent(r.trim());
+      }
+      if (!confirm(`Enviar "${f.name}" para ${p.name} e começar a imprimir?`)) return;
+      const cab = { "X-PrintBridge": "1", "Content-Type": "application/octet-stream" };
+      if (TOKEN) cab.Authorization = "Bearer " + TOKEN;
+      const r = await fetch(`/api/impressoras/${p.id}/imprimir?nome=${encodeURIComponent(f.name)}${slot}`, { method: "POST", headers: cab, body: f });
+      if (!r.ok) alert(maiuscula((await r.json().catch(() => ({}))).erro || "falha ao enviar"));
+    } });
+  return el("span", {}, entrada, el("button", { class: "sec", onclick: () => entrada.click() }, bambu ? "Enviar .gcode.3mf" : "Enviar G-code"));
+}
+
+// ---------- embutir em outro site ----------
+function embutirModal(p) {
+  const base = location.origin;
+  const iframe = `<iframe src="${base}/embed?impressora=${p.id}&token=SEU_TOKEN" style="width:100%;height:520px;border:0" title="${p.name}"></iframe>`;
+  const js = `<div id="impressora"></div>\n<script src="${base}/printbridge.js"><\/script>\n<script>\n  PrintBridge.embutir("#impressora", { servidor: "${base}", token: "SEU_TOKEN", impressora: "${p.id}" });\n<\/script>`;
+  janela(`Embutir "${p.name}"`, [
+    el("p", {}, "Cole num site ou sistema seu. Antes, libere o endereço desse site em Configurações → Sites que podem embutir, e troque SEU_TOKEN pelo token de lá."),
+    el("label", {}, "Com iframe"), el("pre", {}, iframe),
+    el("label", {}, "Com o script (ajusta a altura sozinho)"), el("pre", {}, js),
+    el("p", { class: "suave" }, "Opções no endereço: controles=0 (só olhar) · tema=claro ou escuro · sem impressora= mostra todas."),
+    el("p", { class: "suave" }, `API: GET ${base}/api/impressoras/${p.id} com o cabeçalho Authorization: Bearer SEU_TOKEN.`),
+  ]);
+}
+
+// ---------- configurações (só neste computador) ----------
+async function configuracoes() {
+  let c;
+  try { c = await api("config"); } catch (e) { return alert(maiuscula(e.message)); }
+  const tok = el("input", { value: c.token, readonly: true, style: "font-family:monospace" });
+  const origens = el("textarea", { rows: 4, placeholder: "https://meusistema.com.br" }, (c.origens || []).join("\n"));
+  const msg = el("div");
+  janela("Configurações", [
+    el("label", {}, "Token da API"),
+    el("div", { class: "linha" }, el("div", { class: "cresce" }, tok),
+      el("button", { class: "sec", onclick: () => { navigator.clipboard?.writeText(tok.value); msg.replaceChildren(el("div", { class: "sucesso" }, "Token copiado")); } }, "Copiar"),
+      el("button", { class: "perigo", onclick: async () => { if (!confirm("Gerar um token novo? Tudo que usa o atual para de funcionar.")) return;
+        tok.value = (await api("config", "POST", { novo_token: true })).token; } }, "Trocar")),
+    el("div", { class: "dica" }, "Outros aparelhos, sistemas e sites embutidos usam este token. Este computador não precisa dele."),
+    el("label", {}, "Sites que podem embutir o PrintBridge (um por linha)"), origens,
+    el("div", { class: "dica" }, "Ex.: https://meusistema.com.br — libera o iframe e as chamadas da API pelo navegador desse site."),
+    msg,
+    el("div", { class: "rodape" }, el("span", { class: "suave" }, c.rede ? `Aberto para a rede na porta ${c.porta}` : `Só este computador (porta ${c.porta}). Para a rede: python -m printbridge --rede`),
+      el("button", { onclick: async () => { try { const r = await api("config", "POST", { origens: origens.value.split(/\s+/).filter(Boolean) });
+          origens.value = r.origens.join("\n"); msg.replaceChildren(el("div", { class: "sucesso" }, "Salvo")); } catch (e) { msg.replaceChildren(el("div", { class: "erro" }, e.message)); } } }, "Salvar")),
+  ]);
+}
+
+function janela(titulo, corpo) {
+  const m = document.getElementById("modal");
+  const fundo = el("div", { class: "fundo-modal", onclick: (e) => e.target === fundo && m.replaceChildren() },
+    el("div", { class: "modal", role: "dialog", "aria-modal": "true", "aria-label": titulo },
+      el("div", { class: "linha" }, el("h2", { class: "cresce" }, titulo), el("button", { class: "sec", onclick: () => m.replaceChildren(), "aria-label": "Fechar" }, "✕")),
+      el("div", { style: "margin-top:10px" }, corpo)));
+  m.replaceChildren(fundo);
+}
+
+// ---------- assistente "Adicionar impressora": marca → passo a passo → dados → testar ----------
+let A = null;
+const SITUACAO = { pronto: ["pronta", "ok"], parcial: ["em parte", "meio"], em_breve: ["em breve", "cinza"] };
+function abrirAssistente() { A = { etapa: 1 }; desenharAssistente(); }
+function fecharAssistente() { A = null; document.getElementById("modal").replaceChildren(); }
+function desenharAssistente() {
+  if (!A) return;
+  const m = MARCAS.find((x) => x.id === A.marca);
+  const corpo = A.etapa === 1 ? etapaMarca() : A.etapa === 2 ? etapaPassos(m) : etapaDados(m);
+  janela("Adicionar impressora" + (m ? " · " + m.nome : ""), [el("div", { class: "etapas" }, [1, 2, 3].map((n) => el("span", { class: n <= A.etapa ? "feita" : "" }))), corpo]);
+}
+function etapaMarca() {
+  return [el("p", { class: "suave", style: "margin-top:0" }, "Qual é a marca da impressora?"),
+    el("div", { class: "marcas" }, MARCAS.map((m) => { const [t, c] = SITUACAO[m.situacao] || SITUACAO.em_breve;
+      return el("button", { class: "marca", onclick: () => { A = { etapa: 2, marca: m.id, modelo: m.modelos[0] }; desenharAssistente(); } },
+        m.nome, el("span", { class: "selo " + c }, t), el("small", {}, m.conexao)); }))];
+}
+function etapaPassos(m) {
+  const pronto = m.situacao !== "em_breve";
+  return [el("label", { for: "modelo", style: "margin-top:0" }, "Modelo"),
+    el("select", { id: "modelo", onchange: (e) => (A.modelo = e.target.value) }, m.modelos.map((x) => el("option", { value: x, selected: x === A.modelo }, x))),
+    el("h2", { style: "margin:16px 0 4px;font-size:15px" }, pronto ? "Na impressora, faça isto:" : "Como vai funcionar"),
+    el("ol", { class: "passos" }, m.passos.map((p) => el("li", {}, el("span", {}, p)))),
+    m.aviso && el("div", { class: "aviso" }, m.aviso),
+    !pronto && el("div", { class: "aviso" }, "Esta marca ainda não é compatível. Os passos acima são o que ela vai pedir."),
+    el("div", { class: "rodape" }, el("button", { class: "sec", onclick: () => { A = { etapa: 1 }; desenharAssistente(); } }, "← Outra marca"),
+      pronto && el("button", { onclick: () => { A.etapa = 3; A.campos = Object.fromEntries(m.campos.map((c) => [c.id, c.padrao || ""])); desenharAssistente(); if (m.descobre) buscar(m); } }, "Já fiz, continuar →"))];
+}
+async function buscar(m) {
+  A.buscando = true; A.achadas = null; desenharAssistente();
+  try { A.achadas = (await api("descobrir", "POST", { marca: m.id })).achadas; } catch { A.achadas = []; }
+  if (A) { A.buscando = false; desenharAssistente(); }
+}
+function etapaDados(m) {
+  const partes = [];
+  if (m.descobre) {
+    partes.push(el("div", { class: "linha" }, el("b", { class: "cresce" }, "Encontradas na rede"),
+      el("button", { class: "sec", disabled: A.buscando, onclick: () => buscar(m) }, A.buscando ? "procurando…" : "Procurar de novo")));
+    if (A.buscando) partes.push(el("p", { class: "suave" }, el("span", { class: "girando" }), " procurando na rede (uns 10 segundos)…"));
+    else if (A.achadas && !A.achadas.length) partes.push(el("p", { class: "suave" }, "Nenhuma encontrada. Confira se está ligada e no mesmo Wi-Fi — ou digite o IP."));
+    else if (A.achadas) partes.push(A.achadas.map((x) => el("button", { class: "achada" + (A.campos.ip === x.ip ? " on" : ""), onclick: () => {
+        A.campos.ip = x.ip; if (x.serial) A.campos.serial = x.serial; if (!A.campos.name && x.nome) A.campos.name = x.nome;
+        if (x.modelo && m.modelos.includes(x.modelo)) A.modelo = x.modelo; A.msg = null; desenharAssistente(); } },
+      el("span", {}, x.nome || x.ip), el("span", { class: "suave" }, [x.modelo, x.ip].filter(Boolean).join(" · ")))));
+  }
+  for (const c of m.campos) {
+    const id = "c-" + c.id;
+    partes.push(el("label", { for: id }, c.rotulo + (c.obrigatorio ? "" : " (opcional)")),
+      el("input", { id, type: c.tipo === "senha" ? "password" : "text", inputmode: c.tipo === "numero" ? "numeric" : null, value: A.campos[c.id] || "",
+        maxlength: c.tamanho || null, autocomplete: "off", spellcheck: "false", oninput: (e) => (A.campos[c.id] = e.target.value) }),
+      c.dica && el("div", { class: "dica" }, c.dica));
+  }
+  if (A.msg) partes.push(el("div", { class: A.msg.ok ? "sucesso" : "erro" }, A.msg.texto));
+  partes.push(el("div", { class: "rodape" },
+    el("button", { class: "sec", disabled: A.ocupado, onclick: () => { A.etapa = 2; A.msg = null; desenharAssistente(); } }, "← Passo a passo"),
+    el("button", { disabled: A.ocupado, onclick: () => adicionar(m) }, A.ocupado ? [el("span", { class: "girando" }), " testando a conexão…"] : "Testar e adicionar")));
+  return partes;
+}
+async function adicionar(m) {
+  A.ocupado = true; A.msg = null; desenharAssistente();
+  try {
+    const p = await api("impressoras", "POST", { marca: m.id, campos: { ...A.campos, model: A.modelo } });
+    fecharAssistente();
+    janela("Pronto!", [el("p", {}, `${p.name} foi adicionada e já aparece no painel.`),
+      el("div", { class: "rodape" }, el("button", { class: "sec", onclick: abrirAssistente }, "Adicionar outra"),
+        el("button", { onclick: () => document.getElementById("modal").replaceChildren() }, "Concluir"))]);
+    api("impressoras").then(receber).catch(() => {});
+  } catch (e) { if (A) { A.ocupado = false; A.msg = { ok: false, texto: maiuscula(e.message) + "." }; desenharAssistente(); } }
+}
+
+// ---------- embutido: avisa a página de fora da altura (printbridge.js ajusta o iframe) ----------
+function avisarAltura() {
+  // a altura do conteúdo (não da janela): o iframe cresce ou encolhe até caber sem rolagem
+  const altura = Math.ceil(document.querySelector("main").getBoundingClientRect().height) + 2;
+  if (EMBUTIDO && window.parent !== window) window.parent.postMessage({ printbridge: "altura", altura }, "*");
+}
+new ResizeObserver(avisarAltura).observe(document.querySelector("main"));
+
+// ---------- começo ----------
+document.getElementById("btn-adicionar")?.addEventListener("click", abrirAssistente);
+document.getElementById("btn-config")?.addEventListener("click", configuracoes);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !(A && A.ocupado)) { A = null; document.getElementById("modal").replaceChildren(); } });
+(async () => {
+  try {
+    const info = await api("info");
+    LOCAL = info.local;
+    if (!LOCAL) document.getElementById("btn-config")?.remove();
+    MARCAS = await api("marcas");
+    receber(await api("impressoras"));
+    ouvir();
+  } catch (e) {
+    document.getElementById("grade").replaceChildren(el("div", { class: "cartao vazio" },
+      el("h2", { style: "margin:0 0 6px;font-size:17px" }, "Sem acesso ao PrintBridge"),
+      el("p", { class: "suave" }, maiuscula(e.message) + ". De outro aparelho ou site, o endereço precisa do token (…?token=SEU_TOKEN).")));
+  }
+})();
+</script>
+</body>
+</html>

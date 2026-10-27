@@ -27,5 +27,11 @@ anycubic = ["cryptography>=41"]   # abrir as credenciais do Modo LAN
 video = ["aiortc>=1.9"]           # câmera WebRTC das Creality novas e H.264 (traz o PyAV)
 tudo = ["cryptography>=41", "aiortc>=1.9"]
 
+[project.scripts]
+printbridge = "printbridge.__main__:main"
+
 [tool.setuptools]
 packages = ["printbridge"]
+
+[tool.setuptools.package-data]
+printbridge = ["web/*"]

@@ -8,11 +8,15 @@
 
     printbridge.procurar()       # impressoras na rede local (Bambu, Creality, Klipper, Flashforge,
                                  # Anycubic, Elegoo, Prusa)
+
+    g = printbridge.Gerenciador()   # guarda as impressoras em disco e as mantém conectadas
+    python -m printbridge           # o painel web (e a API REST), em http://localhost:8750
 """
 
 __version__ = "0.1.0"
 
 from .descoberta import procurar
 from .frota import MARCAS, criar, ficha, testar
+from .gerenciador import Gerenciador
 
-__all__ = ["MARCAS", "criar", "ficha", "procurar", "testar", "__version__"]
+__all__ = ["MARCAS", "Gerenciador", "criar", "ficha", "procurar", "testar", "__version__"]
