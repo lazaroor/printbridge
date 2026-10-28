@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>PrintBridge</title>
+<link rel="icon" href="/icone.png">
 <style>
   :root {
     --fundo: #f3f5f7; --cartao: #fff; --borda: #dde2e7; --texto: #18202a; --suave: #5d6875;
@@ -150,6 +151,7 @@ const VELOCIDADES = { 1: "Silencioso", 2: "Padrão", 3: "Esportivo", 4: "Turbo" 
 
 function receber(lista) {
   IMPRESSORAS = SO ? lista.filter((p) => p.id === SO) : lista;
+  if (PULAR) { const p = lista.find((x) => x.id === PULAR.id); if (p) PULAR.atualizarImpressora(p); }
   desenhar();
 }
 function ouvir() {
@@ -242,6 +244,7 @@ function cartao(p) {
       onchange: (e) => cmd("set_speed", Number(e.target.value))() },
       Object.entries(VELOCIDADES).map(([n, t]) => el("option", { value: n, selected: Number(n) === p.speed_level }, t))));
     if (tem("lote") && !ativa) acoes.push(botaoEnviar(p));
+    if (tem("pular") && ativa) acoes.push(el("button", { class: "sec", onclick: () => abrirPular(p) }, "Pular peças"));
     partes.push(el("div", { class: "acoes" }, acoes));
   }
   if (p.envio) {
@@ -327,6 +330,105 @@ async function configuracoes() {
       el("button", { onclick: async () => { try { const r = await api("config", "POST", { origens: origens.value.split(/\s+/).filter(Boolean) });
           origens.value = r.origens.join("\n"); msg.replaceChildren(el("div", { class: "sucesso" }, "Salvo")); } catch (e) { msg.replaceChildren(el("div", { class: "erro" }, e.message)); } } }, "Salvar")),
   ]);
+}
+
+// ---------- Pular peças (Bambu Lab): prévia 3D da mesa, clique para marcar ----------
+// A frente da mesa é o lado da tela da impressora (Y = 0 no G-code). A cena (mesa.js) desenha a
+// borda com FRENTE/FUNDO/ESQUERDA/DIREITA e avisa o giro, para a bússola no canto.
+let PULAR = null;
+function posicao(x, d) {
+  const [W, H] = d.mesa?.length === 2 ? d.mesa : [256, 256];
+  let cx, cy;
+  if (x.caixa) { cx = (x.caixa[0] + x.caixa[2]) / 2; cy = (x.caixa[1] + x.caixa[3]) / 2; }
+  else {
+    const linhas = d.vista?.pecas?.[String(x.id)]; if (!linhas?.length) return "";
+    let sx = 0, sy = 0, n = 0;
+    for (const [, , xy] of linhas) for (let i = 0; i < xy.length; i += 2) { sx += xy[i]; sy += xy[i + 1]; n++; }
+    if (!n) return ""; cx = sx / n / 10; cy = sy / n / 10;
+  }
+  const lado = cx < W / 3 ? "à esquerda" : cx > (2 * W) / 3 ? "à direita" : "no centro";
+  const prof = cy < H / 3 ? "frente" : cy > (2 * H) / 3 ? "fundo" : "meio";
+  return prof === "meio" && lado === "no centro" ? "meio da mesa" : `${prof}, ${lado}`;
+}
+function abrirPular(p) {
+  const estado = { id: p.id, p, dados: null, marcadas: new Set(), sobre: null, cena: null, vivo: true };
+  PULAR = estado;
+  const corpo = el("div", {}, el("p", { class: "suave" }, el("span", { class: "girando" }), " lendo as peças do arquivo no cartão da impressora… a primeira vez leva até 1 minuto."));
+  janela(`Pular peças · ${p.name}`, corpo);
+  const fechou = new MutationObserver(() => {
+    if (!corpo.isConnected) { estado.vivo = false; estado.cena?.destruir(); if (PULAR === estado) PULAR = null; fechou.disconnect(); }
+  });
+  fechou.observe(document.getElementById("modal"), { childList: true });
+  const pulados = () => new Set(estado.p.pulados || []);
+  const desenharLista = () => {
+    const d = estado.dados, pul = pulados();
+    estado.lista.replaceChildren(...d.pecas.map((x) => el("label", {
+        style: `display:flex;gap:6px;align-items:center;margin:0;font-weight:500;${pul.has(x.id) ? "color:var(--ruim);text-decoration:line-through" : ""}` },
+      el("input", { type: "checkbox", style: "width:auto", checked: pul.has(x.id) || estado.marcadas.has(x.id), disabled: pul.has(x.id), onchange: () => alternar(x.id) }),
+      x.nome, el("span", { class: "suave" }, posicao(x, d) ? "· " + posicao(x, d) : ""))));
+    estado.botao.disabled = !estado.marcadas.size;
+    estado.botao.textContent = estado.marcadas.size ? `Pular ${estado.marcadas.size} peça${estado.marcadas.size === 1 ? "" : "s"}` : "Marque as peças a pular";
+    const peca = d.pecas.find((x) => x.id === estado.sobre);
+    if (estado.dica) {
+      estado.dica.textContent = peca ? `${peca.nome}${posicao(peca, d) ? " (" + posicao(peca, d) + ")" : ""}${pul.has(peca.id) ? " · pulada" : estado.marcadas.has(peca.id) ? " · marcada" : " · clique para marcar"}` : "";
+      estado.dica.style.display = peca ? "" : "none";
+    }
+    estado.cena?.atualizar({ marcadas: estado.marcadas, pulados: pul, camadaAtual: estado.p.layer ?? null, sobre: estado.sobre });
+  };
+  const alternar = (id) => { if (pulados().has(id)) return; estado.marcadas.has(id) ? estado.marcadas.delete(id) : estado.marcadas.add(id); desenharLista(); };
+  estado.atualizarImpressora = (np) => { estado.p = np; if (estado.dados && estado.lista) desenharLista(); };
+  const montar = async (d) => {
+    const tem3d = Object.keys(d.vista?.pecas || {}).length > 0;
+    const canvas = el("canvas", { style: "width:100%;height:360px;display:block;border-radius:8px;touch-action:none", "aria-label": "Prévia 3D da mesa: clique numa peça para marcar" });
+    const seta = el("div", { style: "display:flex;flex-direction:column;align-items:center;transition:transform .1s" },
+      el("span", { style: "font-size:9px;font-weight:800;color:#5d6875;line-height:1" }, "FUNDO"),
+      el("span", { style: "font-size:16px;font-weight:900;color:#e07a1f;line-height:1" }, "↓"),
+      el("span", { style: "font-size:9px;font-weight:800;color:#e07a1f;line-height:1" }, "FRENTE"));
+    const bussola = el("div", { title: "A frente da mesa é o lado da tela da impressora", "aria-label": "Bússola: a seta aponta para a frente da mesa",
+      style: "position:absolute;top:8px;right:8px;width:58px;height:58px;border-radius:999px;background:rgba(255,255,255,.92);border:1px solid #c9d3cb;display:grid;place-items:center;pointer-events:none" }, seta);
+    estado.dica = el("div", { style: "position:absolute;bottom:8px;left:8px;background:rgba(22,33,28,.85);color:#fff;font-size:12.5px;font-weight:600;padding:4px 9px;border-radius:6px;pointer-events:none;display:none" });
+    const vistas = el("div", { style: "position:absolute;top:8px;left:8px;display:flex;gap:4px" },
+      [["diagonal", "3D"], ["frente", "Frente"], ["lado", "Lado"], ["cima", "De cima"]].map(([k, t]) =>
+        el("button", { class: "sec", style: "font-size:11.5px;padding:3px 8px;background:#fff;color:#18202a", onclick: () => estado.cena?.olhar(k) }, t)));
+    estado.lista = el("div", { style: "display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:4px;font-size:13px;margin-top:10px" });
+    estado.msg = el("div");
+    estado.botao = el("button", { class: "perigo", style: "margin-top:12px", onclick: async () => {
+      const nomes = d.pecas.filter((x) => estado.marcadas.has(x.id)).map((x) => x.nome);
+      if (!confirm(`Parar de imprimir ${nomes.length === 1 ? `"${nomes[0]}"` : `${nomes.length} peças (${nomes.join(", ")})`} em ${estado.p.name}? Não dá para voltar atrás.`)) return;
+      try {
+        await api(`impressoras/${estado.id}/comando`, "POST", { acao: "skip", valor: [...estado.marcadas] });
+        estado.marcadas.clear();
+        estado.msg.replaceChildren(el("div", { class: "sucesso" }, "Comando enviado — a peça fica vermelha quando a impressora confirmar."));
+        desenharLista();
+      } catch (e) { estado.msg.replaceChildren(el("div", { class: "erro" }, maiuscula(e.message))); }
+    } });
+    corpo.replaceChildren(...[
+      !d.marcado && el("div", { class: "aviso", style: "margin-top:0" }, "Este arquivo foi fatiado sem “identificar objetos” — a impressora pode não conseguir pular. No Bambu Studio, ligue Label objects (Processo → Outros)."),
+      tem3d && el("div", { style: "position:relative" }, canvas, vistas, bussola, estado.dica,
+        el("div", { style: "position:absolute;bottom:8px;right:8px;font-size:11px;color:#5d6875;background:rgba(255,255,255,.85);padding:2px 7px;border-radius:6px;pointer-events:none" }, "arraste para girar · role para aproximar")),
+      estado.lista, estado.msg, estado.botao].filter(Boolean));  // replaceChildren escreveria "false"
+    desenharLista();
+    if (!tem3d) return;
+    try {
+      const { criarMesa } = await import("/mesa.js");
+      if (!estado.vivo) return;
+      estado.cena = criarMesa(canvas, { mesa: d.mesa, vista: d.vista, aoClicar: alternar,
+        aoPassar: (id) => { estado.sobre = id; desenharLista(); }, aoGirar: (g) => { seta.style.transform = `rotate(${g}deg)`; } });
+      desenharLista();
+    } catch { canvas.parentElement.remove(); } // sem WebGL: fica a lista
+  };
+  (async function esperar() {
+    if (!estado.vivo) return;
+    try {
+      const d = await api(`impressoras/${p.id}/pecas`);
+      if (!estado.vivo) return;
+      if (d.estado === "carregando") return setTimeout(esperar, 3000);
+      if (d.estado !== "pronto") return corpo.replaceChildren(el("div", { class: d.estado === "erro" ? "erro" : "aviso" },
+        d.estado === "erro" ? maiuscula(d.erro) : d.estado === "sem_impressao" ? "A impressora não está imprimindo agora." : "Pular peças ainda é só para Bambu Lab."));
+      estado.dados = d;
+      montar(d);
+    } catch (e) { if (estado.vivo) corpo.replaceChildren(el("div", { class: "erro" }, maiuscula(e.message))); }
+  })();
 }
 
 function janela(titulo, corpo) {

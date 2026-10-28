@@ -56,6 +56,9 @@ class Gerenciador:
         self.printers: dict = {}
         self.cameras: dict[str, Camera] = {}
         self._lock = threading.Lock()
+        self._pecas: dict[str, dict] = {}       # impressora → peças da impressão atual (ou erro)
+        self._lendo: set[str] = set()
+        self._ultima_camada: dict[str, int] = {}
         for pc in self.cfg["printers"]:
             self._ligar(pc)
 
@@ -177,10 +180,68 @@ class Gerenciador:
     def lista(self) -> list[dict]:
         with self._lock:
             ids = list(self.printers)
-        return [self.resumo(pid) for pid in ids]
+        lista = [self.resumo(pid) for pid in ids]
+        for s in lista:
+            self._esquecer_pecas_antigas(s)
+        return lista
 
     def comando(self, pid: str, acao: str, valor=None) -> None:
+        if acao == "skip":  # só peças que existem no arquivo em impressão
+            conhecidas = {x["id"] for x in (self._pecas.get(pid) or {}).get("pecas") or []}
+            valor = [int(v) for v in (valor or []) if int(v) in conhecidas]
+            if not valor:
+                raise ValueError("escolha peças da impressão atual (abra o Pular peças de novo)")
         self._impressora(pid).command(acao, valor)
+
+    # ---------- pular peças (Bambu Lab) ----------
+
+    def _esquecer_pecas_antigas(self, s: dict) -> None:
+        """A lista de peças vale só para a impressão em que foi lida: reimprimir um arquivo de
+        mesmo nome (e mesmo nº de camadas) não muda nada que dê para comparar. Ela some quando a
+        impressão termina ou recomeça (a camada voltou)."""
+        pid, camada = s["id"], s.get("layer")
+        anterior = self._ultima_camada.get(pid)
+        if s.get("status") in ("FINISH", "IDLE", "FAILED") or (
+                camada is not None and anterior is not None and camada + 1 < anterior):
+            self._pecas.pop(pid, None)
+        if camada is not None:
+            self._ultima_camada[pid] = camada
+
+    def pecas(self, pid: str) -> dict:
+        """Peças da impressão atual para o Pular peças, com a prévia 3D. A 1ª leitura baixa o
+        arquivo do cartão (~1 min para 50 MB): enquanto isso, {"estado": "carregando"}."""
+        p = self._impressora(pid)
+        s = self.resumo(pid)
+        self._esquecer_pecas_antigas(s)
+        if "pular" not in (s.get("recursos") or []):
+            return {"estado": "nao_suportado"}
+        if s.get("status") not in ("RUNNING", "PAUSE", "PREPARE") or not s.get("arquivo"):
+            return {"estado": "sem_impressao"}
+        guardado = self._pecas.get(pid)
+        if guardado and guardado.get("estado") == "erro" and time.time() - guardado.get("em", 0) > 90:
+            self._pecas.pop(pid, None)  # erro (ex.: impressora ocupada no FTP): tenta de novo depois de 1,5 min
+            guardado = None
+        if guardado:
+            return {**guardado, "pulados": s.get("pulados") or []}
+        if pid not in self._lendo:
+            self._lendo.add(pid)
+            threading.Thread(target=self._ler_pecas, args=(p, s["arquivo"], s.get("total_layers")), daemon=True).start()
+        return {"estado": "carregando"}
+
+    def _ler_pecas(self, p, arquivo: str, camadas) -> None:
+        from . import objetos
+        try:
+            d = objetos.ler(p.ip, p.access_code, arquivo, camadas)
+            if camadas and d.get("camadas") and d["camadas"] != camadas:
+                d = {"estado": "erro", "erro": f"o arquivo \"{d['arquivo']}\" no cartão é de outra placa ({d['camadas']} camadas; "
+                                               f"a impressão tem {camadas}). Inicie a impressão de novo pelo fatiador."}
+            else:
+                d["estado"] = "pronto"
+        except Exception as e:
+            d = {"estado": "erro", "erro": f"não consegui ler as peças do arquivo ({e})"}
+        d["em"] = time.time()
+        self._pecas[p.id] = d
+        self._lendo.discard(p.id)
 
     def foto(self, pid: str, depois: float = 0, espera: float = 10) -> tuple[bytes | None, float]:
         self._impressora(pid)

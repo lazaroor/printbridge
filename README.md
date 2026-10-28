@@ -52,6 +52,23 @@ antes de salvar.
 - Sem os extras (`pip install -e .`) tudo funciona, menos o Modo LAN da Anycubic
   (`cryptography`) e as câmeras WebRTC/H.264 (`aiortc`).
 
+## Pular peças (Bambu Lab)
+
+Com a impressão em andamento, o botão **Pular peças** abre uma prévia 3D da mesa com cada peça
+como ela vai sair: as paredes externas, tiradas do próprio G-code, e até onde já imprimiu. Clique
+nas peças que quer cancelar e confirme. Para não errar o lado:
+
+- a borda da mesa mostra **FRENTE** (em laranja, o lado da tela da impressora), **FUNDO**,
+  **ESQUERDA** e **DIREITA**;
+- a bússola no canto aponta sempre para a frente, em qualquer vista ou zoom;
+- cada peça mostra a posição em palavras ("frente, à esquerda").
+
+O arquivo é lido do cartão da impressora: a primeira vez leva de 1 a 3 minutos em placas
+grandes. A lista vale só para a impressão em andamento e é descartada quando ela termina ou
+recomeça. Assim, reimprimir a mesma placa (ou outra placa do mesmo projeto) nunca mostra as peças
+erradas. Para pular, o arquivo precisa ter sido fatiado com "Label objects / Identificar objetos"
+ligado no Bambu Studio.
+
 ## Embutir em outro sistema ou site
 
 1. No painel, abra **Configurações** e:
@@ -111,7 +128,8 @@ Todas as respostas são JSON. De fora do computador, mande o token.
 | GET | `/api/eventos` | Server-Sent Events: a lista a cada 2 s |
 | GET | `/api/impressoras/ID/camera.jpg` | uma foto da câmera |
 | GET | `/api/impressoras/ID/camera.mjpeg` | vídeo MJPEG (serve direto num `<img>`) |
-| POST | `/api/impressoras/ID/comando` | `{"acao": "pause"}`; ações: `pause`, `resume`, `stop`, `set_nozzle`, `set_bed`, `set_speed` (1–4), `light_on`, `light_off` (com `"valor"` quando precisa) |
+| GET | `/api/impressoras/ID/pecas` | Pular peças (Bambu Lab): peças da impressão atual, com posição e prévia 3D (`"estado": "carregando"` enquanto lê o arquivo) |
+| POST | `/api/impressoras/ID/comando` | `{"acao": "pause"}`; ações: `pause`, `resume`, `stop`, `set_nozzle`, `set_bed`, `set_speed` (1–4), `light_on`, `light_off`, `skip` (`"valor": [ids]`, só peças da impressão atual) — com `"valor"` quando precisa |
 | POST | `/api/impressoras/ID/imprimir?nome=peca.gcode` | corpo = o arquivo; envia e começa a imprimir (Bambu Lab: `.gcode.3mf`, `&slot=` 0–3 do AMS ou 254 da bobina externa) |
 | POST | `/api/impressoras` | `{"marca": "creality", "campos": {"ip": "…", "name": "…"}}`: testa e adiciona |
 | POST | `/api/testar` | mesmo corpo: só testa |
@@ -145,6 +163,9 @@ painel usa). `printbridge.ficha("anycubic")` devolve o que pedir à pessoa e o p
 tela da impressora. Veja também [examples/monitor.py](examples/monitor.py).
 
 ## Contribuir
+
+A prévia 3D (`printbridge/web/mesa.js`) é gerada a partir de `empacotar/mesa/mesaCena.js`, com o
+three.js embutido, para funcionar sem internet: `npm install && npm run mesa`.
 
 Para acrescentar uma marca: escreva o adaptador com a mesma interface dos outros
 (`klipper.py` é o exemplo mais curto), ligue em `frota.py` e na busca (`descoberta.py`) e

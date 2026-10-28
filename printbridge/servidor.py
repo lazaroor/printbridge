@@ -23,11 +23,12 @@ API (JSON):
   GET    /api/eventos                           Server-Sent Events: a lista a cada 2 s
   GET    /api/impressoras/ID/camera.jpg         uma foto
   GET    /api/impressoras/ID/camera.mjpeg       vídeo (MJPEG, para <img>)
+  GET    /api/impressoras/ID/pecas              Pular peças (Bambu): peças da impressão atual + prévia 3D
   POST   /api/impressoras                       {marca, campos}: testa e adiciona
   POST   /api/testar                            {marca, campos}: só testa
   POST   /api/descobrir                         {marca?}: procura na rede
   POST   /api/impressoras/ID/comando            {acao, valor}: pause, resume, stop, set_nozzle,
-                                                set_bed, set_speed, light_on, light_off
+                                                set_bed, set_speed, light_on, light_off, skip ([ids])
   POST   /api/impressoras/ID/nome               {nome}
   POST   /api/impressoras/ID/imprimir?nome=X    corpo = o arquivo (.gcode / .gcode.3mf)
   DELETE /api/impressoras/ID
@@ -221,6 +222,10 @@ class Servidor:
                     return self._pagina("app.html", "text/html; charset=utf-8", embutida=True) if self._host_ok() else self._erro(403, "acesso negado")
                 if caminho == "/printbridge.js":
                     return self._pagina("printbridge.js", "text/javascript; charset=utf-8")
+                if caminho == "/mesa.js":  # prévia 3D do Pular peças (three.js embutido; gerado por npm run mesa)
+                    return self._pagina("mesa.js", "text/javascript; charset=utf-8")
+                if caminho in ("/icone.png", "/favicon.ico"):
+                    return self._pagina("icone.png", "image/png")
                 if not caminho.startswith("/api/"):
                     return self._erro(404, "não encontrado")
                 if not self._autorizado(q, mudando=False):
@@ -245,12 +250,14 @@ class Servidor:
                                             "porta": srv.porta, "rede": srv.rede})
                 if caminho == "/api/eventos":
                     return self._eventos()
-                m = re.fullmatch(r"/api/impressoras/([0-9a-f]{8})(/camera\.jpg|/camera\.mjpeg)?", caminho)
+                m = re.fullmatch(r"/api/impressoras/([0-9a-f]{8})(/camera\.jpg|/camera\.mjpeg|/pecas)?", caminho)
                 if not m:
                     return self._erro(404, "não encontrado")
                 pid, extra = m.groups()
                 if not extra:
                     return self._json(200, self._com_envio(srv.g.resumo(pid)))
+                if extra == "/pecas":
+                    return self._json(200, srv.g.pecas(pid))
                 if extra == "/camera.jpg":
                     jpg, _ = srv.g.foto(pid)
                     if not jpg:

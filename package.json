@@ -1,0 +1,12 @@
+{
+  "name": "printbridge-web",
+  "private": true,
+  "description": "Só para gerar printbridge/web/mesa.js (a prévia 3D do Pular peças, com o three.js embutido). O PrintBridge em si é Python.",
+  "scripts": {
+    "mesa": "esbuild empacotar/mesa/mesaCena.js --bundle --format=esm --minify --legal-comments=eof --outfile=printbridge/web/mesa.js"
+  },
+  "devDependencies": {
+    "esbuild": "0.27.7",
+    "three": "0.186.0"
+  }
+}

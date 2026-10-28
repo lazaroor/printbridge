@@ -47,7 +47,13 @@ def _mesa(proj: dict) -> list[float]:
         return [256.0, 256.0]
 
 
-def ler(ip: str, access_code: str, nome_arquivo: str) -> dict:
+def _camadas(z: zipfile.ZipFile, placa: int) -> int | None:
+    with z.open(f"Metadata/plate_{placa}.gcode") as g:
+        m = re.search(rb"; total layer number: (\d+)", g.read(256 * 1024))
+    return int(m.group(1)) if m else None
+
+
+def ler(ip: str, access_code: str, nome_arquivo: str, camadas_impressao: int | None = None) -> dict:
     nome = nome_arquivo.rsplit("/", 1)[-1]
     z = zipfile.ZipFile(io.BytesIO(_baixar(ip, access_code, nome)))
     nomes = z.namelist()
@@ -55,6 +61,8 @@ def ler(ip: str, access_code: str, nome_arquivo: str) -> dict:
     if not placas:
         raise ValueError("o arquivo em impressão não tem G-code de placa")
     placa = placas[0]  # arquivo exportado/enviado traz só a placa que está imprimindo
+    if len(placas) > 1 and camadas_impressao:  # projeto com várias placas fatiadas: a do nº de camadas
+        placa = next((n for n in placas if _camadas(z, n) == camadas_impressao), placa)
 
     info = z.read("Metadata/slice_info.config").decode("utf-8", "replace")
     bloco = next((b for b in re.findall(r"<plate>[\s\S]*?</plate>", info)
