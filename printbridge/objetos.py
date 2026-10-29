@@ -1,41 +1,37 @@
-"""Peças (objetos) da impressão atual, para o "Pular peças" do painel.
+"""Peças (objetos) da impressão atual, para o "Pular peças".
 
 A impressora só informa o NOME do arquivo que está imprimindo e a lista de peças já puladas
-(s_obj). As peças em si estão no arquivo, no cartão SD: baixamos uma cópia (FTPS, só
-leitura) e lemos do .gcode.3mf:
-- slice_info.config → cada peça com identify_id (o número que o comando skip_objects usa)
-  e nome; e se o fatiamento marcou os objetos (label_object_enabled) — sem isso não dá
-  para pular;
-- plate_N.json → retângulo de cada peça na mesa (mm), para desenhar o mapa;
+(s_obj). As peças em si estão no arquivo, no cartão SD: baixamos uma cópia (FTPS, só leitura)
+e lemos do .gcode.3mf:
+- slice_info.config → cada peça com identify_id (o número que o comando skip_objects usa) e
+  nome; e se o fatiamento marcou os objetos (label_object_enabled) — sem isso não dá para pular;
+- plate_N.json → retângulo de cada peça na mesa (mm);
 - project_settings.config → tamanho da mesa;
-- o próprio G-code → contorno 3D de cada peça (trajetos.py), para a prévia 3D da mesa.
+- o próprio G-code → onde cada peça está de verdade e o contorno 3D (trajetos.py).
+
+O cartão da Bambu entrega só ~0,1 MB/s durante a impressão e não aceita ler a partir do meio
+(REST): um arquivo de 19 MB leva uns 3 minutos. Para não esperar tudo isso, o arquivo é lido
+ENQUANTO chega: plate_N.json e as configurações vêm logo no começo, e a primeira camada do
+G-code (onde todas as peças aparecem com o seu número) logo depois — com isso a lista sai em
+segundos (ao_parcial). O mesmo download segue até o fim para a prévia 3D e os nomes oficiais.
+Uma cópia do resultado fica em disco: reimprimir o mesmo arquivo não baixa de novo.
 """
 
+import hashlib
 import io
 import json
 import re
+import struct
+import time
 import zipfile
+import zlib
+from pathlib import Path
 
 from . import envio
 from . import trajetos
 
-
-def _baixar(ip: str, access_code: str, nome: str) -> bytes:
-    ftp = envio.conectar(ip, access_code)
-    try:
-        for caminho in (nome, f"cache/{nome}", f"/{nome}"):
-            buf = io.BytesIO()
-            try:
-                ftp.retrbinary(f"RETR {caminho}", buf.write)
-                return buf.getvalue()
-            except Exception:
-                continue
-        raise FileNotFoundError(f"não achei {nome} no cartão da impressora")
-    finally:
-        try:
-            ftp.quit()
-        except Exception:
-            ftp.close()
+_SEM_EXTENSAO = re.compile(r"\.(stl|3mf|obj|step)$", re.I)
+_MOVIMENTO = re.compile(r"([XYE])(-?\d*\.?\d+)")
 
 
 def _mesa(proj: dict) -> list[float]:
@@ -47,51 +43,215 @@ def _mesa(proj: dict) -> list[float]:
         return [256.0, 256.0]
 
 
-def _camadas(z: zipfile.ZipFile, placa: int) -> int | None:
-    with z.open(f"Metadata/plate_{placa}.gcode") as g:
-        m = re.search(rb"; total layer number: (\d+)", g.read(256 * 1024))
-    return int(m.group(1)) if m else None
+def _caixas_por_posicao(centros: dict[int, tuple[float, float]], caixas: list[dict]) -> dict[int, dict]:
+    """Casa cada peça (pelo centro dela na mesa) com o retângulo do plate_N.json que a contém —
+    os ids do plate_N.json são outros, e casar pelo nome erra quando há peças de mesmo nome."""
+    fora = {}
+    for pid, (cx, cy) in centros.items():
+        dentro = [c for c in caixas if len(c.get("bbox") or []) >= 4
+                  and c["bbox"][0] - 1 <= cx <= c["bbox"][2] + 1 and c["bbox"][1] - 1 <= cy <= c["bbox"][3] + 1]
+        if not dentro and caixas:  # nenhum contém: o de centro mais próximo
+            dentro = [min(caixas, key=lambda c: ((c["bbox"][0] + c["bbox"][2]) / 2 - cx) ** 2 + ((c["bbox"][1] + c["bbox"][3]) / 2 - cy) ** 2)]
+        if dentro:
+            fora[pid] = min(dentro, key=lambda c: (c["bbox"][2] - c["bbox"][0]) * (c["bbox"][3] - c["bbox"][1]))
+    return fora
 
 
-def ler(ip: str, access_code: str, nome_arquivo: str, camadas_impressao: int | None = None) -> dict:
-    nome = nome_arquivo.rsplit("/", 1)[-1]
-    z = zipfile.ZipFile(io.BytesIO(_baixar(ip, access_code, nome)))
+class _PrimeiraCamada:
+    """Lê o começo do G-code (texto) até o fim da primeira camada: nº total de camadas e, de cada
+    peça, alguns pontos do contorno — para saber onde ela está na mesa."""
+
+    def __init__(self):
+        self.camadas = None
+        self.pontos: dict[int, list[tuple[float, float]]] = {}
+        self.ordem: list[int] = []
+        self.pronta = False
+        self._resto = b""
+        self._camada = 0
+        self._peca = None
+        self._x = self._y = 0.0
+        self._lido = 0
+
+    def alimentar(self, texto: bytes) -> None:
+        if self.pronta:
+            return
+        self._lido += len(texto)
+        linhas = (self._resto + texto).split(b"\n")
+        self._resto = linhas.pop()
+        for bruta in linhas:
+            if bruta.startswith(b";"):
+                if bruta.startswith(b"; CHANGE_LAYER"):
+                    self._camada += 1
+                    if self._camada >= 2:  # começou a 2ª camada: a 1ª já mostrou todas as peças
+                        self.pronta = True
+                        return
+                elif bruta.startswith(b"; total layer number:"):
+                    self.camadas = int(bruta.rsplit(b":", 1)[1])
+                elif bruta.startswith(b"; start printing object, unique label id:"):
+                    self._peca = int(bruta.rsplit(b":", 1)[1])
+                    if self._peca not in self.pontos:
+                        self.pontos[self._peca] = []
+                        self.ordem.append(self._peca)
+                elif bruta.startswith(b"; stop printing object"):
+                    self._peca = None
+                continue
+            if not bruta.startswith((b"G1 ", b"G0 ", b"G2 ", b"G3 ")):
+                continue
+            v = dict(_MOVIMENTO.findall(bruta.decode("ascii", "ignore")))
+            self._x = float(v.get("X", self._x))
+            self._y = float(v.get("Y", self._y))
+            if self._peca is not None and float(v.get("E", 0)) > 0 and len(self.pontos[self._peca]) < 400:
+                self.pontos[self._peca].append((self._x, self._y))
+        if self._lido > 40_000_000:  # algo estranho (sem CHANGE_LAYER): desiste da leitura rápida
+            self.pronta = True
+
+
+class _LeitorEmAndamento:
+    """Percorre o .zip (.3mf) enquanto ele chega, entrada por entrada. Os arquivos da Bambu não
+    trazem os tamanhos no cabeçalho de cada entrada (vêm num descritor depois dos dados): as
+    compactadas acabam quando o zlib diz que acabou; as guardadas sem compressão (imagens), no
+    descritor "PK\\x07\\x08" cujo tamanho bate."""
+
+    def __init__(self, camadas_impressao):
+        self.camadas_impressao = camadas_impressao
+        self.buf = bytearray()
+        self.pos = 0
+        self.entrada = None
+        self.pequenos: dict[str, bytes] = {}
+        self.placa = None
+        self.camada1: _PrimeiraCamada | None = None
+        self.parado = False
+
+    def alimentar(self, bloco: bytes) -> None:
+        self.buf += bloco
+        if not self.parado:
+            try:
+                self._andar()
+            except Exception:  # formato inesperado: fica só a leitura completa, no fim
+                self.parado = True
+
+    def _andar(self) -> None:
+        while not self.parado:
+            if self.entrada is None:
+                if len(self.buf) < self.pos + 30:
+                    return
+                if self.buf[self.pos:self.pos + 4] != b"PK\x03\x04":  # diretório central: acabaram as entradas
+                    self.parado = True
+                    return
+                _, _, flag, metodo, _, _, _, comp, _, nl, el = struct.unpack("<IHHHHHIIIHH", self.buf[self.pos:self.pos + 30])
+                if len(self.buf) < self.pos + 30 + nl + el:
+                    return
+                nome = self.buf[self.pos + 30:self.pos + 30 + nl].decode("utf-8", "replace")
+                inicio = self.pos + 30 + nl + el
+                self.entrada = {"nome": nome, "metodo": metodo, "inicio": inicio, "alimentado": inicio,
+                                "tam": comp if not flag & 8 else None, "dados": bytearray(),
+                                "z": zlib.decompressobj(-15) if metodo == 8 else None}
+                m = re.fullmatch(r"Metadata/plate_(\d+)\.gcode", nome)
+                if m and self.camada1 is None:
+                    self.entrada["gcode"] = int(m.group(1))
+                    self.entrada["camada"] = _PrimeiraCamada()
+            e = self.entrada
+            if e["metodo"] == 8:
+                novo = bytes(self.buf[e["alimentado"]:])
+                e["alimentado"] = len(self.buf)
+                saida = e["z"].decompress(novo)
+                self._usar(e, saida)
+                if not e["z"].eof:
+                    return
+                fim = e["alimentado"] - len(e["z"].unused_data)
+            else:  # guardado: o fim é o descritor cujo tamanho bate
+                fim = None
+                busca = e.get("busca", e["inicio"])
+                while True:
+                    i = self.buf.find(b"PK\x07\x08", busca)
+                    if i < 0 or i + 16 > len(self.buf):
+                        e["busca"] = max(e["inicio"], len(self.buf) - 16)
+                        return
+                    if struct.unpack("<I", self.buf[i + 8:i + 12])[0] == i - e["inicio"]:
+                        fim = i
+                        break
+                    busca = i + 1
+            self._fechar(e, fim)
+            if self.parado:
+                return
+
+    def _usar(self, e: dict, saida: bytes) -> None:
+        if re.fullmatch(r"Metadata/(plate_\d+\.json|project_settings\.config)", e["nome"]):
+            e["dados"] += saida
+        c = e.get("camada")
+        if c is not None and not c.pronta:
+            c.alimentar(saida)
+            if c.camadas is not None and self.camadas_impressao and c.camadas != self.camadas_impressao:
+                e["camada"] = None  # é outra placa do projeto: segue para a próxima
+            elif c.pronta:
+                self.camada1, self.placa = c, e["gcode"]
+                self.parado = True  # o resto só interessa à leitura completa, no fim
+
+    def _fechar(self, e: dict, fim: int) -> None:
+        if e["dados"]:
+            self.pequenos[e["nome"]] = bytes(e["dados"])
+        # pula o descritor (16 bytes; 24 em zip64) até o próximo cabeçalho
+        for tam in (16, 24, 12, 20, 0):
+            if self.buf[fim + tam:fim + tam + 2] == b"PK" or len(self.buf) < fim + tam + 2:
+                self.pos = fim + tam
+                break
+        else:
+            self.pos = fim + 16
+        self.entrada = None
+
+    def resultado_rapido(self, nome: str) -> dict | None:
+        c = self.camada1
+        if not c or not c.ordem:
+            return None
+        try:
+            caixas = json.loads(self.pequenos.get(f"Metadata/plate_{self.placa}.json") or b"{}").get("bbox_objects") or []
+        except ValueError:
+            caixas = []
+        try:
+            proj = json.loads(self.pequenos.get("Metadata/project_settings.config") or b"{}")
+        except ValueError:
+            proj = {}
+        centros = {pid: (sum(x for x, _ in pts) / len(pts), sum(y for _, y in pts) / len(pts))
+                   for pid, pts in c.pontos.items() if pts}
+        casadas = _caixas_por_posicao(centros, caixas)
+        pecas = []
+        for pid in c.ordem:
+            cx = casadas.get(pid)
+            p = {"id": pid, "nome": _SEM_EXTENSAO.sub("", cx.get("name", "")) if cx else f"Peça {len(pecas) + 1}"}
+            if cx:
+                p["caixa"] = [round(float(v), 1) for v in cx["bbox"][:4]]
+            pecas.append(p)
+        return {"arquivo": nome, "placa": self.placa, "marcado": True, "mesa": _mesa(proj), "camadas": c.camadas,
+                "pecas": pecas[:200], "vista": {}, "vista_pendente": True}
+
+
+def _completo(conteudo: bytes, nome: str, camadas_impressao) -> dict:
+    """Leitura completa (o arquivo inteiro já baixado): nomes oficiais e prévia 3D."""
+    z = zipfile.ZipFile(io.BytesIO(conteudo))
     nomes = z.namelist()
     placas = sorted(int(m.group(1)) for n in nomes if (m := re.match(r"Metadata/plate_(\d+)\.gcode$", n)))
     if not placas:
         raise ValueError("o arquivo em impressão não tem G-code de placa")
+
+    def camadas_de(n):
+        with z.open(f"Metadata/plate_{n}.gcode") as g:
+            m = re.search(rb"; total layer number: (\d+)", g.read(256 * 1024))
+        return int(m.group(1)) if m else None
+
     placa = placas[0]  # arquivo exportado/enviado traz só a placa que está imprimindo
     if len(placas) > 1 and camadas_impressao:  # projeto com várias placas fatiadas: a do nº de camadas
-        placa = next((n for n in placas if _camadas(z, n) == camadas_impressao), placa)
+        placa = next((n for n in placas if camadas_de(n) == camadas_impressao), placa)
 
-    info = z.read("Metadata/slice_info.config").decode("utf-8", "replace")
+    info = z.read("Metadata/slice_info.config").decode("utf-8", "replace") if "Metadata/slice_info.config" in nomes else ""
     bloco = next((b for b in re.findall(r"<plate>[\s\S]*?</plate>", info)
                   if re.search(rf'key="index" value="{placa}"', b)), info)
     marcado = re.search(r'key="label_object_enabled" value="true"', bloco) is not None
-    pecas = [{"id": int(i), "nome": re.sub(r"\.(stl|3mf|obj|step)$", "", n, flags=re.I)}
+    pecas = [{"id": int(i), "nome": _SEM_EXTENSAO.sub("", n)}
              for i, n in re.findall(r'<object identify_id="(\d+)" name="([^"]*)"', bloco)]
-
-    # retângulos: plate_N.json, casados pela ordem/nome (os ids desse arquivo são outros)
-    try:
-        caixas = json.loads(z.read(f"Metadata/plate_{placa}.json")).get("bbox_objects") or []
-    except KeyError:
-        caixas = []
-    livres = list(caixas)
-    for p in pecas:
-        c = next((c for c in livres if re.sub(r"\.(stl|3mf|obj|step)$", "", c.get("name", ""), flags=re.I) == p["nome"]), None)
-        if c is None and livres:
-            c = livres[0]
-        if c is not None:
-            livres.remove(c)
-            p["caixa"] = [round(float(v), 1) for v in c.get("bbox", [])[:4]]
-
     try:
         proj = json.loads(z.read("Metadata/project_settings.config"))
     except (KeyError, ValueError):
         proj = {}
-    # nº de camadas do cabeçalho do G-code: confere que este é MESMO o arquivo em impressão
-    # (projetos com várias placas geram arquivos de mesmo nome, e a impressora imprime da cópia
-    # que guardou em /cache — o arquivo da raiz pode já ser de outra placa)
     gcode = z.read(f"Metadata/plate_{placa}.gcode")
     m = re.search(rb"; total layer number: (\d+)", gcode[:256 * 1024])
     camadas = int(m.group(1)) if m else None
@@ -100,5 +260,91 @@ def ler(ip: str, access_code: str, nome_arquivo: str, camadas_impressao: int | N
     except Exception as e:  # a prévia 3D é um extra: sem ela o mapa 2D continua
         print(f"prévia 3D: {e!r}")
         vista = {}
+
+    # retângulos: onde cada peça está de verdade (centro das paredes no G-code) → plate_N.json
+    try:
+        caixas = json.loads(z.read(f"Metadata/plate_{placa}.json")).get("bbox_objects") or []
+    except (KeyError, ValueError):
+        caixas = []
+    centros = {}
+    for pid, linhas in (vista.get("pecas") or {}).items():
+        xs = [v for _c, _z, xy in linhas for v in xy[0::2]]
+        ys = [v for _c, _z, xy in linhas for v in xy[1::2]]
+        if xs:
+            centros[int(pid)] = (sum(xs) / len(xs) / 10, sum(ys) / len(ys) / 10)
+    casadas = _caixas_por_posicao(centros, caixas)
+    if not pecas:  # sem slice_info: as peças marcadas no G-code
+        pecas = [{"id": pid, "nome": _SEM_EXTENSAO.sub("", casadas[pid].get("name", "")) if pid in casadas else f"Peça {i + 1}"}
+                 for i, pid in enumerate(sorted(centros))]
+    for p in pecas:
+        if p["id"] in casadas:
+            p["caixa"] = [round(float(v), 1) for v in casadas[p["id"]]["bbox"][:4]]
     return {"arquivo": nome, "placa": placa, "marcado": marcado, "mesa": _mesa(proj), "camadas": camadas,
-            "pecas": pecas[:200], "vista": vista}
+            "pecas": pecas[:200], "vista": vista, "vista_pendente": False}
+
+
+def _guardar(cache: Path, chave: str, dados: dict) -> None:
+    try:
+        cache.mkdir(parents=True, exist_ok=True)
+        (cache / f"{chave}.json").write_text(json.dumps(dados, separators=(",", ":")), encoding="utf-8")
+        antigos = sorted(cache.glob("*.json"), key=lambda f: f.stat().st_mtime)[:-30]  # guarda os 30 mais recentes
+        for f in antigos:
+            f.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def ler(ip: str, access_code: str, nome_arquivo: str, camadas_impressao: int | None = None,
+        ao_parcial=None, cache: str | Path | None = None) -> dict:
+    """Peças do arquivo em impressão. ao_parcial(dados) é chamado assim que a lista fica pronta
+    (em segundos), sem a prévia 3D (vista_pendente). cache: pasta para guardar o resultado —
+    o mesmo arquivo (nome, tamanho e data no cartão) não é baixado de novo."""
+    nome = nome_arquivo.rsplit("/", 1)[-1]
+    cache = Path(cache) if cache else None
+    ftp = envio.conectar(ip, access_code)
+    try:
+        for caminho in (nome, f"cache/{nome}", f"/{nome}"):
+            try:
+                tamanho = ftp.size(caminho)
+            except Exception:
+                continue
+            try:
+                data = ftp.sendcmd(f"MDTM {caminho}")[4:].strip()
+            except Exception:
+                data = ""
+            chave = hashlib.sha1(f"{ip}|{caminho}|{tamanho}|{data}|{camadas_impressao}".encode()).hexdigest()[:20]
+            if cache and (cache / f"{chave}.json").exists():
+                try:
+                    dados = json.loads((cache / f"{chave}.json").read_text(encoding="utf-8"))
+                    (cache / f"{chave}.json").touch()
+                    return dados
+                except (OSError, ValueError):
+                    pass
+            leitor = _LeitorEmAndamento(camadas_impressao)
+            avisou = False
+
+            def chegou(bloco: bytes) -> None:
+                nonlocal avisou
+                leitor.alimentar(bloco)
+                if not avisou and leitor.camada1 is not None and ao_parcial:
+                    avisou = True
+                    rapido = leitor.resultado_rapido(nome)
+                    if rapido:
+                        try:
+                            ao_parcial(rapido)
+                        except Exception as e:
+                            print(f"pular peças (lista rápida): {e!r}")
+
+            inicio = time.time()
+            ftp.retrbinary(f"RETR {caminho}", chegou, blocksize=64 * 1024)
+            dados = _completo(bytes(leitor.buf), nome, camadas_impressao)
+            dados["segundos"] = round(time.time() - inicio)
+            if cache:
+                _guardar(cache, chave, dados)
+            return dados
+        raise FileNotFoundError(f"não achei {nome} no cartão da impressora")
+    finally:
+        try:
+            ftp.quit()
+        except Exception:
+            ftp.close()

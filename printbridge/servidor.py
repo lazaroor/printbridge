@@ -37,11 +37,19 @@ API (JSON):
 import hmac
 import ipaddress
 import json
+import sys
 import re
 import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+class _ServidorExclusivo(ThreadingHTTPServer):
+    """No Windows, SO_REUSEADDR (o padrão do http.server) deixa DOIS programas ouvirem a mesma
+    porta — o segundo não percebe que ela está ocupada e os pedidos caem ora num, ora no outro.
+    Sem ele, o bind falha e o servidor tenta a porta seguinte."""
+    allow_reuse_address = sys.platform != "win32"
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -63,7 +71,7 @@ class Servidor:
         self.http = None
         for p in range(porta, porta + 10):
             try:
-                self.http = ThreadingHTTPServer((host, p), self._handler())
+                self.http = _ServidorExclusivo((host, p), self._handler())
                 self.porta = p
                 break
             except OSError:

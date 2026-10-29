@@ -68,6 +68,9 @@
   .temp button { padding: 3px 8px; font-size: 12px }
   .acoes { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px }
   .vazio { text-align: center; padding: 40px 16px }
+  .cartao.com-pular { grid-column: 1 / -1 }  /* com o Pular peças aberto, o cartão ocupa a linha toda */
+  .cartao.com-pular .camera { aspect-ratio: auto; height: 240px }  /* sem isso, a câmera na largura toda empurra o painel */
+  .pular { border-top: 1px solid var(--borda); margin-top: 12px; padding-top: 12px }
   .aviso { background: var(--meio-fundo); color: var(--meio); border-radius: 8px; padding: 8px 10px; font-size: 13px; margin-top: 10px }
   .erro { background: var(--ruim-fundo); color: var(--ruim); border-radius: 8px; padding: 8px 10px; font-size: 13px; margin-top: 10px }
   .sucesso { background: var(--ok-fundo); color: var(--ok); border-radius: 8px; padding: 8px 10px; font-size: 13px; margin-top: 10px }
@@ -151,7 +154,7 @@ const VELOCIDADES = { 1: "Silencioso", 2: "Padrão", 3: "Esportivo", 4: "Turbo" 
 
 function receber(lista) {
   IMPRESSORAS = SO ? lista.filter((p) => p.id === SO) : lista;
-  if (PULAR) { const p = lista.find((x) => x.id === PULAR.id); if (p) PULAR.atualizarImpressora(p); }
+  if (PULAR) { const p = lista.find((x) => x.id === PULAR.id); if (p) { PULAR.p = p; if (PULAR.lista) desenharPular(PULAR); } }
   desenhar();
 }
 function ouvir() {
@@ -184,7 +187,7 @@ function desenhar() {
   }
   // só refaz o cartão cujo estado mudou: um botão não some debaixo do mouse no meio do clique
   const novos = IMPRESSORAS.map((p) => {
-    const chave = JSON.stringify([{ ...p, last_update: 0 }, cameras.has(p.id), CONTROLES]);  // last_update muda sempre: não conta
+    const chave = JSON.stringify([{ ...p, last_update: 0 }, cameras.has(p.id), CONTROLES, PULAR?.id === p.id]);  // last_update muda sempre: não conta
     const velho = feitos.get(p.id);
     if (velho && velho.chave === chave && velho.el.isConnected) return velho.el;
     const e = cartao(p);
@@ -239,12 +242,14 @@ function cartao(p) {
     if (p.status === "RUNNING") acoes.push(el("button", { class: "sec", onclick: cmd("pause") }, "⏸ Pausar"));
     if (p.status === "PAUSE") acoes.push(el("button", { onclick: cmd("resume") }, "▶ Continuar"));
     if (ativa) acoes.push(el("button", { class: "perigo", onclick: cmd("stop", null, `Parar a impressão em "${p.name}"? Não dá para continuar depois.`) }, "■ Parar"));
-    if (tem("luz")) acoes.push(el("button", { class: "sec", onclick: cmd(p.light ? "light_off" : "light_on") }, p.light ? "Apagar luz" : "Acender luz"));
+    // a luz vem como "on"/"off" (Bambu, Creality, Elegoo) ou true/false (Flashforge, Anycubic): "off" não é acesa
+    const luzAcesa = p.light === true || p.light === "on";
+    if (tem("luz")) acoes.push(el("button", { class: "sec", onclick: cmd(luzAcesa ? "light_off" : "light_on") }, luzAcesa ? "Apagar luz" : "Acender luz"));
     if (tem("velocidade") && ativa) acoes.push(el("select", { "aria-label": "Velocidade", style: "width:auto",
       onchange: (e) => cmd("set_speed", Number(e.target.value))() },
       Object.entries(VELOCIDADES).map(([n, t]) => el("option", { value: n, selected: Number(n) === p.speed_level }, t))));
     if (tem("lote") && !ativa) acoes.push(botaoEnviar(p));
-    if (tem("pular") && ativa) acoes.push(el("button", { class: "sec", onclick: () => abrirPular(p) }, "Pular peças"));
+    if (tem("pular") && ativa) acoes.push(el("button", { class: PULAR?.id === p.id ? "" : "sec", onclick: () => abrirPular(p) }, "Pular peças"));
     partes.push(el("div", { class: "acoes" }, acoes));
   }
   if (p.envio) {
@@ -261,7 +266,8 @@ function cartao(p) {
       el("button", { class: "perigo", style: "font-size:12px;padding:4px 8px", onclick: async () => {
         if (confirm(`Remover "${p.name}" do PrintBridge?`)) { await api(`impressoras/${p.id}`, "DELETE").catch((e) => alert(e.message)); cameras.delete(p.id); } } }, "Remover")));
   }
-  return el("section", { class: "cartao", "aria-label": p.name }, partes);
+  if (PULAR?.id === p.id) partes.push(PULAR.painel);
+  return el("section", { class: "cartao" + (PULAR?.id === p.id ? " com-pular" : ""), "aria-label": p.name }, partes);
 }
 
 // o mesmo <img> entre um redesenho e outro: recriar reconectaria o vídeo a cada 2 s
@@ -351,84 +357,129 @@ function posicao(x, d) {
   return prof === "meio" && lado === "no centro" ? "meio da mesa" : `${prof}, ${lado}`;
 }
 function abrirPular(p) {
-  const estado = { id: p.id, p, dados: null, marcadas: new Set(), sobre: null, cena: null, vivo: true };
+  if (PULAR?.id === p.id) return fecharPular();
+  fecharPular();
+  const estado = { id: p.id, p, dados: null, marcadas: new Set(), sobre: null, cena: null, vivo: true, giro: 0 };
   PULAR = estado;
-  const corpo = el("div", {}, el("p", { class: "suave" }, el("span", { class: "girando" }), " lendo as peças do arquivo no cartão da impressora… a primeira vez leva até 1 minuto."));
-  janela(`Pular peças · ${p.name}`, corpo);
-  const fechou = new MutationObserver(() => {
-    if (!corpo.isConnected) { estado.vivo = false; estado.cena?.destruir(); if (PULAR === estado) PULAR = null; fechou.disconnect(); }
-  });
-  fechou.observe(document.getElementById("modal"), { childList: true });
-  const pulados = () => new Set(estado.p.pulados || []);
-  const desenharLista = () => {
-    const d = estado.dados, pul = pulados();
-    estado.lista.replaceChildren(...d.pecas.map((x) => el("label", {
-        style: `display:flex;gap:6px;align-items:center;margin:0;font-weight:500;${pul.has(x.id) ? "color:var(--ruim);text-decoration:line-through" : ""}` },
-      el("input", { type: "checkbox", style: "width:auto", checked: pul.has(x.id) || estado.marcadas.has(x.id), disabled: pul.has(x.id), onchange: () => alternar(x.id) }),
-      x.nome, el("span", { class: "suave" }, posicao(x, d) ? "· " + posicao(x, d) : ""))));
-    estado.botao.disabled = !estado.marcadas.size;
-    estado.botao.textContent = estado.marcadas.size ? `Pular ${estado.marcadas.size} peça${estado.marcadas.size === 1 ? "" : "s"}` : "Marque as peças a pular";
-    const peca = d.pecas.find((x) => x.id === estado.sobre);
-    if (estado.dica) {
-      estado.dica.textContent = peca ? `${peca.nome}${posicao(peca, d) ? " (" + posicao(peca, d) + ")" : ""}${pul.has(peca.id) ? " · pulada" : estado.marcadas.has(peca.id) ? " · marcada" : " · clique para marcar"}` : "";
-      estado.dica.style.display = peca ? "" : "none";
-    }
-    estado.cena?.atualizar({ marcadas: estado.marcadas, pulados: pul, camadaAtual: estado.p.layer ?? null, sobre: estado.sobre });
-  };
-  const alternar = (id) => { if (pulados().has(id)) return; estado.marcadas.has(id) ? estado.marcadas.delete(id) : estado.marcadas.add(id); desenharLista(); };
-  estado.atualizarImpressora = (np) => { estado.p = np; if (estado.dados && estado.lista) desenharLista(); };
-  const montar = async (d) => {
-    const tem3d = Object.keys(d.vista?.pecas || {}).length > 0;
-    const canvas = el("canvas", { style: "width:100%;height:360px;display:block;border-radius:8px;touch-action:none", "aria-label": "Prévia 3D da mesa: clique numa peça para marcar" });
-    const seta = el("div", { style: "display:flex;flex-direction:column;align-items:center;transition:transform .1s" },
+  estado.painel = el("div", { class: "pular" });
+  estado.corpo = el("div", {}, el("p", { class: "suave" }, el("span", { class: "girando" }), " lendo as peças do arquivo no cartão da impressora… leva alguns segundos."));
+  estado.painel.append(el("div", { class: "linha", style: "margin-bottom:8px" }, el("b", { class: "cresce" }, "Pular peças"),
+    el("button", { class: "sec", style: "padding:3px 9px", onclick: fecharPular, "aria-label": "Fechar o Pular peças" }, "fechar")), estado.corpo);
+  desenhar();
+  estado.painel.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  esperarPecas(estado);
+}
+function fecharPular() {
+  if (!PULAR) return;
+  PULAR.vivo = false;
+  PULAR.cena?.destruir();
+  PULAR = null;
+  desenhar();
+}
+async function esperarPecas(estado) {
+  if (!estado.vivo) return;
+  try {
+    const d = await api(`impressoras/${estado.id}/pecas`);
+    if (!estado.vivo) return;
+    if (d.estado === "carregando") return setTimeout(() => esperarPecas(estado), 3000);
+    if (d.estado !== "pronto") return estado.corpo.replaceChildren(el("div", { class: d.estado === "erro" ? "erro" : "aviso", style: "margin-top:0" },
+      d.estado === "erro" ? maiuscula(d.erro) : d.estado === "sem_impressao" ? "A impressora não está imprimindo agora." : "Pular peças ainda é só para Bambu Lab."));
+    const tinha3d = Object.keys(estado.dados?.vista?.pecas || {}).length > 0;
+    estado.dados = d;
+    if (!estado.lista || (!tinha3d && Object.keys(d.vista?.pecas || {}).length)) montarPular(estado); else desenharPular(estado);
+    if (d.vista_pendente) setTimeout(() => esperarPecas(estado), 4000);  // a prévia 3D ainda vem do cartão
+  } catch (e) { if (estado.vivo) estado.corpo.replaceChildren(el("div", { class: "erro", style: "margin-top:0" }, maiuscula(e.message))); }
+}
+function desenharPular(estado) {
+  const d = estado.dados, pul = new Set(estado.p.pulados || []);
+  const alternar = (id) => { if (pul.has(id)) return; estado.marcadas.has(id) ? estado.marcadas.delete(id) : estado.marcadas.add(id); desenharPular(estado); };
+  estado.alternar = alternar;
+  estado.lista.replaceChildren(...d.pecas.map((x) => el("label", {
+      style: `display:flex;gap:6px;align-items:center;margin:0;font-weight:500;${pul.has(x.id) ? "color:var(--ruim);text-decoration:line-through" : ""}` },
+    el("input", { type: "checkbox", style: "width:auto", checked: pul.has(x.id) || estado.marcadas.has(x.id), disabled: pul.has(x.id), onchange: () => alternar(x.id) }),
+    x.nome, el("span", { class: "suave" }, posicao(x, d) ? "· " + posicao(x, d) : ""))));
+  estado.botao.disabled = !estado.marcadas.size;
+  estado.botao.textContent = estado.marcadas.size ? `Pular ${estado.marcadas.size} peça${estado.marcadas.size === 1 ? "" : "s"}` : "Marque as peças a pular";
+  if (estado.mapa) estado.mapa.replaceChildren(...mapa2d(estado, pul));
+  const peca = d.pecas.find((x) => x.id === estado.sobre);
+  if (estado.dica) {
+    estado.dica.textContent = peca ? `${peca.nome}${posicao(peca, d) ? " (" + posicao(peca, d) + ")" : ""}${pul.has(peca.id) ? " · pulada" : estado.marcadas.has(peca.id) ? " · marcada" : " · clique para marcar"}` : "";
+    estado.dica.style.display = peca ? "" : "none";
+  }
+  estado.cena?.atualizar({ marcadas: estado.marcadas, pulados: pul, camadaAtual: estado.p.layer ?? null, sobre: estado.sobre });
+}
+// enquanto a prévia 3D não chega: o mapa da mesa visto de cima (retângulos do plate_N.json)
+function mapa2d(estado, pul) {
+  const d = estado.dados, [W, H] = d.mesa?.length === 2 ? d.mesa : [256, 256];
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", `-14 -14 ${W + 28} ${H + 28}`);
+  svg.setAttribute("style", "width:100%;max-width:420px;display:block;margin:0 auto");
+  const add = (tag, at, pai = svg) => { const e = document.createElementNS(NS, tag); for (const [k, v] of Object.entries(at)) e.setAttribute(k, v); pai.append(e); return e; };
+  add("rect", { x: -14, y: -14, width: W + 28, height: H + 28, fill: "#c9d0cb", rx: 6 });
+  add("rect", { x: -14, y: H, width: W + 28, height: 14, fill: "#f08c2b" });
+  add("rect", { x: 0, y: 0, width: W, height: H, fill: "#2a2e2b" });
+  const txt = (t, x, y, cor) => { const e = add("text", { x, y, fill: cor, "font-size": 9, "font-weight": 800, "text-anchor": "middle", "dominant-baseline": "middle" }); e.textContent = t; };
+  txt("FRENTE · lado da tela", W / 2, H + 7, "#fff"); txt("FUNDO", W / 2, -7, "#3d4540");
+  for (const x of d.pecas.filter((x) => x.caixa)) {
+    const [x0, y0, x1, y1] = x.caixa, marcada = estado.marcadas.has(x.id), pulada = pul.has(x.id);
+    const r = add("rect", { x: x0, y: H - y1, width: Math.max(2, x1 - x0), height: Math.max(2, y1 - y0), rx: 2,
+      fill: pulada ? "#e5484d" : marcada ? "#2fbf71" : "#f2f4f1", "fill-opacity": pulada || marcada ? 0.9 : 0.25,
+      stroke: pulada ? "#e5484d" : marcada ? "#2fbf71" : "#f2f4f1", "stroke-width": 1, style: pulada ? "" : "cursor:pointer" });
+    r.addEventListener("click", () => estado.alternar(x.id));
+    const tt = document.createElementNS(NS, "title"); tt.textContent = `${x.nome} (${posicao(x, d)})`; r.append(tt);
+  }
+  return [svg];
+}
+async function montarPular(estado) {
+  const d = estado.dados;
+  estado.cena?.destruir(); estado.cena = null; estado.mapa = null; estado.dica = null;
+  const tem3d = Object.keys(d.vista?.pecas || {}).length > 0;
+  estado.lista = el("div", { style: "display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:4px;font-size:13px;margin-top:10px" });
+  estado.msg = el("div");
+  estado.botao = el("button", { class: "perigo", style: "margin-top:12px", onclick: async () => {
+    const nomes = d.pecas.filter((x) => estado.marcadas.has(x.id)).map((x) => x.nome);
+    if (!confirm(`Parar de imprimir ${nomes.length === 1 ? `"${nomes[0]}"` : `${nomes.length} peças (${nomes.join(", ")})`} em ${estado.p.name}? Não dá para voltar atrás.`)) return;
+    try {
+      await api(`impressoras/${estado.id}/comando`, "POST", { acao: "skip", valor: [...estado.marcadas] });
+      estado.marcadas.clear();
+      estado.msg.replaceChildren(el("div", { class: "sucesso" }, "Comando enviado — a peça fica vermelha quando a impressora confirmar."));
+      desenharPular(estado);
+    } catch (e) { estado.msg.replaceChildren(el("div", { class: "erro" }, maiuscula(e.message))); }
+  } });
+  const partes = [!d.marcado && el("div", { class: "aviso", style: "margin-top:0" }, "Este arquivo foi fatiado sem “identificar objetos” — a impressora pode não conseguir pular. No Bambu Studio, ligue Label objects (Processo → Outros).")];
+  let canvas, seta;
+  if (tem3d) {
+    canvas = el("canvas", { style: "width:100%;height:380px;display:block;border-radius:8px;touch-action:none", "aria-label": "Prévia 3D da mesa: clique numa peça para marcar" });
+    seta = el("div", { style: "display:flex;flex-direction:column;align-items:center;transition:transform .1s" },
       el("span", { style: "font-size:9px;font-weight:800;color:#5d6875;line-height:1" }, "FUNDO"),
       el("span", { style: "font-size:16px;font-weight:900;color:#e07a1f;line-height:1" }, "↓"),
       el("span", { style: "font-size:9px;font-weight:800;color:#e07a1f;line-height:1" }, "FRENTE"));
-    const bussola = el("div", { title: "A frente da mesa é o lado da tela da impressora", "aria-label": "Bússola: a seta aponta para a frente da mesa",
-      style: "position:absolute;top:8px;right:8px;width:58px;height:58px;border-radius:999px;background:rgba(255,255,255,.92);border:1px solid #c9d3cb;display:grid;place-items:center;pointer-events:none" }, seta);
     estado.dica = el("div", { style: "position:absolute;bottom:8px;left:8px;background:rgba(22,33,28,.85);color:#fff;font-size:12.5px;font-weight:600;padding:4px 9px;border-radius:6px;pointer-events:none;display:none" });
-    const vistas = el("div", { style: "position:absolute;top:8px;left:8px;display:flex;gap:4px" },
-      [["diagonal", "3D"], ["frente", "Frente"], ["lado", "Lado"], ["cima", "De cima"]].map(([k, t]) =>
-        el("button", { class: "sec", style: "font-size:11.5px;padding:3px 8px;background:#fff;color:#18202a", onclick: () => estado.cena?.olhar(k) }, t)));
-    estado.lista = el("div", { style: "display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:4px;font-size:13px;margin-top:10px" });
-    estado.msg = el("div");
-    estado.botao = el("button", { class: "perigo", style: "margin-top:12px", onclick: async () => {
-      const nomes = d.pecas.filter((x) => estado.marcadas.has(x.id)).map((x) => x.nome);
-      if (!confirm(`Parar de imprimir ${nomes.length === 1 ? `"${nomes[0]}"` : `${nomes.length} peças (${nomes.join(", ")})`} em ${estado.p.name}? Não dá para voltar atrás.`)) return;
-      try {
-        await api(`impressoras/${estado.id}/comando`, "POST", { acao: "skip", valor: [...estado.marcadas] });
-        estado.marcadas.clear();
-        estado.msg.replaceChildren(el("div", { class: "sucesso" }, "Comando enviado — a peça fica vermelha quando a impressora confirmar."));
-        desenharLista();
-      } catch (e) { estado.msg.replaceChildren(el("div", { class: "erro" }, maiuscula(e.message))); }
-    } });
-    corpo.replaceChildren(...[
-      !d.marcado && el("div", { class: "aviso", style: "margin-top:0" }, "Este arquivo foi fatiado sem “identificar objetos” — a impressora pode não conseguir pular. No Bambu Studio, ligue Label objects (Processo → Outros)."),
-      tem3d && el("div", { style: "position:relative" }, canvas, vistas, bussola, estado.dica,
-        el("div", { style: "position:absolute;bottom:8px;right:8px;font-size:11px;color:#5d6875;background:rgba(255,255,255,.85);padding:2px 7px;border-radius:6px;pointer-events:none" }, "arraste para girar · role para aproximar")),
-      estado.lista, estado.msg, estado.botao].filter(Boolean));  // replaceChildren escreveria "false"
-    desenharLista();
-    if (!tem3d) return;
-    try {
-      const { criarMesa } = await import("/mesa.js");
-      if (!estado.vivo) return;
-      estado.cena = criarMesa(canvas, { mesa: d.mesa, vista: d.vista, aoClicar: alternar,
-        aoPassar: (id) => { estado.sobre = id; desenharLista(); }, aoGirar: (g) => { seta.style.transform = `rotate(${g}deg)`; } });
-      desenharLista();
-    } catch { canvas.parentElement.remove(); } // sem WebGL: fica a lista
-  };
-  (async function esperar() {
+    partes.push(el("div", { style: "position:relative" }, canvas,
+      el("div", { style: "position:absolute;top:8px;left:8px;display:flex;gap:4px" },
+        [["diagonal", "3D"], ["frente", "Frente"], ["lado", "Lado"], ["cima", "De cima"]].map(([k, tt]) =>
+          el("button", { class: "sec", style: "font-size:11.5px;padding:3px 8px;background:#fff;color:#18202a", onclick: () => estado.cena?.olhar(k) }, tt))),
+      el("div", { title: "A frente da mesa é o lado da tela da impressora", "aria-label": "Bússola: a seta aponta para a frente da mesa",
+        style: "position:absolute;top:8px;right:8px;width:58px;height:58px;border-radius:999px;background:rgba(255,255,255,.92);border:1px solid #c9d3cb;display:grid;place-items:center;pointer-events:none" }, seta),
+      estado.dica,
+      el("div", { style: "position:absolute;bottom:8px;right:8px;font-size:11px;color:#5d6875;background:rgba(255,255,255,.85);padding:2px 7px;border-radius:6px;pointer-events:none" }, "arraste para girar · role para aproximar")));
+  } else {
+    estado.mapa = el("div");
+    partes.push(el("div", { class: "suave", style: "margin-bottom:6px" }, d.vista_pendente
+      ? "Prévia 3D chegando — o arquivo ainda está vindo do cartão (uns minutos em placas grandes). Já dá para marcar pelo mapa ou pela lista."
+      : "Mapa da mesa visto de cima."), estado.mapa);
+  }
+  estado.corpo.replaceChildren(...[...partes, estado.lista, estado.msg, estado.botao].filter(Boolean));  // replaceChildren escreveria "false"
+  desenharPular(estado);
+  if (!tem3d) return;
+  try {
+    const { criarMesa } = await import("/mesa.js");
     if (!estado.vivo) return;
-    try {
-      const d = await api(`impressoras/${p.id}/pecas`);
-      if (!estado.vivo) return;
-      if (d.estado === "carregando") return setTimeout(esperar, 3000);
-      if (d.estado !== "pronto") return corpo.replaceChildren(el("div", { class: d.estado === "erro" ? "erro" : "aviso" },
-        d.estado === "erro" ? maiuscula(d.erro) : d.estado === "sem_impressao" ? "A impressora não está imprimindo agora." : "Pular peças ainda é só para Bambu Lab."));
-      estado.dados = d;
-      montar(d);
-    } catch (e) { if (estado.vivo) corpo.replaceChildren(el("div", { class: "erro" }, maiuscula(e.message))); }
-  })();
+    estado.cena = criarMesa(canvas, { mesa: d.mesa, vista: d.vista, aoClicar: (id) => estado.alternar(id),
+      aoPassar: (id) => { estado.sobre = id; desenharPular(estado); }, aoGirar: (g) => { seta.style.transform = `rotate(${g}deg)`; } });
+    desenharPular(estado);
+  } catch { canvas.parentElement.remove(); } // sem WebGL: fica a lista
 }
 
 function janela(titulo, corpo) {

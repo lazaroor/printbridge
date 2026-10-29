@@ -183,6 +183,7 @@ class Gerenciador:
         lista = [self.resumo(pid) for pid in ids]
         for s in lista:
             self._esquecer_pecas_antigas(s)
+            self._comecar_leitura(s)  # impressão começou: já lê as peças, para o Pular peças abrir na hora
         return lista
 
     def comando(self, pid: str, acao: str, valor=None) -> None:
@@ -208,9 +209,11 @@ class Gerenciador:
             self._ultima_camada[pid] = camada
 
     def pecas(self, pid: str) -> dict:
-        """Peças da impressão atual para o Pular peças, com a prévia 3D. A 1ª leitura baixa o
-        arquivo do cartão (~1 min para 50 MB): enquanto isso, {"estado": "carregando"}."""
-        p = self._impressora(pid)
+        """Peças da impressão atual para o Pular peças. A lista chega em segundos (lida enquanto o
+        arquivo vem do cartão); a prévia 3D, quando ele termina de chegar (vista_pendente até lá).
+        Antes da primeira etapa: {"estado": "carregando"}. Já começa a ler quando a impressão começa
+        (lista()), então normalmente está pronta quando alguém abre."""
+        self._impressora(pid)
         s = self.resumo(pid)
         self._esquecer_pecas_antigas(s)
         if "pular" not in (s.get("recursos") or []):
@@ -223,15 +226,26 @@ class Gerenciador:
             guardado = None
         if guardado:
             return {**guardado, "pulados": s.get("pulados") or []}
-        if pid not in self._lendo:
-            self._lendo.add(pid)
-            threading.Thread(target=self._ler_pecas, args=(p, s["arquivo"], s.get("total_layers")), daemon=True).start()
+        self._comecar_leitura(s)
         return {"estado": "carregando"}
+
+    def _comecar_leitura(self, s: dict) -> None:
+        pid = s["id"]
+        if pid in self._lendo or pid in self._pecas:
+            return
+        if "pular" not in (s.get("recursos") or []) or s.get("status") not in ("RUNNING", "PAUSE") or not s.get("arquivo"):
+            return
+        self._lendo.add(pid)
+        threading.Thread(target=self._ler_pecas, args=(self._impressora(pid), s["arquivo"], s.get("total_layers")), daemon=True).start()
 
     def _ler_pecas(self, p, arquivo: str, camadas) -> None:
         from . import objetos
+        def lista_pronta(rapido: dict) -> None:  # a lista chega antes do 3D
+            if not (camadas and rapido.get("camadas") and rapido["camadas"] != camadas):
+                self._pecas[p.id] = {**rapido, "estado": "pronto", "em": time.time()}
+
         try:
-            d = objetos.ler(p.ip, p.access_code, arquivo, camadas)
+            d = objetos.ler(p.ip, p.access_code, arquivo, camadas, ao_parcial=lista_pronta, cache=self.pasta / "pecas")
             if camadas and d.get("camadas") and d["camadas"] != camadas:
                 d = {"estado": "erro", "erro": f"o arquivo \"{d['arquivo']}\" no cartão é de outra placa ({d['camadas']} camadas; "
                                                f"a impressão tem {camadas}). Inicie a impressão de novo pelo fatiador."}
