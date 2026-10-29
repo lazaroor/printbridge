@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SignPath: configuração de artefato "instalador" — o instalador do Inno Setup. O GitHub Actions
+     envia artefatos dentro de um .zip, com o instalador renomeado para um nome fixo. Os .exe que
+     ele leva dentro já foram assinados (e conferidos: nome do produto e versão) na etapa anterior.
+     Aqui não conferimos product-name/product-version porque o Inno Setup grava esses campos com
+     espaços no fim ("PrintBridge      "), o que faria uma conferência exata recusar o arquivo. -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file path="PrintBridge-instalador.exe">
+      <authenticode-sign />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

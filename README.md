@@ -196,6 +196,13 @@ Para acrescentar uma marca: escreva o adaptador com a mesma interface dos outros
 (`klipper.py` é o exemplo mais curto), ligue em `frota.py` e na busca (`descoberta.py`) e
 acrescente a ficha em `marcas.py`. Os detalhes estão em [PROTOCOLOS.md](PROTOCOLOS.md).
 
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+Os executáveis de Windows são gerados e assinados automaticamente a partir deste repositório. Quem
+aprova cada assinatura, a privacidade e como desinstalar estão em
+[CODE_SIGNING_POLICY.md](CODE_SIGNING_POLICY.md).
+
 ## Licença
 
 Apache-2.0 — veja [LICENSE](LICENSE) e [NOTICE](NOTICE). Os nomes das marcas de impressoras

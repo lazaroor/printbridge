@@ -9,6 +9,12 @@
 AppId={{6B0F6C52-9E7A-4F4B-9B0E-5A1C2D7E8F31}
 AppName={#AppName}
 AppVersion={#AppVersion}
+; nome do produto e versão gravados no instalador (a assinatura pelo SignPath confere)
+VersionInfoProductName={#AppName}
+VersionInfoProductVersion={#AppVersion}
+VersionInfoVersion={#AppVersion}
+VersionInfoDescription=Instalador do PrintBridge
+VersionInfoCopyright=Apache-2.0 - github.com/lazaroor/printbridge
 AppPublisher=PrintBridge
 AppPublisherURL=https://github.com/lazaroor/printbridge
 DefaultDirName={autopf}\{#AppName}

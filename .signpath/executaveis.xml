@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SignPath: configuração de artefato "executaveis" — os dois .exe, enviados juntos num .zip pelo
+     GitHub Actions. Confere nome do produto e versão gravados neles antes de assinar. -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file path="PrintBridge.exe" product-name="PrintBridge" product-version="${version}">
+      <authenticode-sign />
+    </pe-file>
+    <pe-file path="PrintBridge-servidor.exe" product-name="PrintBridge" product-version="${version}">
+      <authenticode-sign />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

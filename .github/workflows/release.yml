@@ -1,5 +1,10 @@
 # Gera os executáveis a cada versão: crie uma tag (git tag v0.2.0 && git push --tags) e os
 # arquivos aparecem em Releases. Também dá para rodar à mão em Actions → Gerar executáveis.
+#
+# Assinatura (Code signing policy: CODE_SIGNING_POLICY.md): com o segredo SIGNPATH_API_TOKEN e a
+# variável SIGNPATH_ORGANIZATION_ID configurados, os .exe e o instalador de Windows são assinados
+# pelo SignPath Foundation — cada versão espera a aprovação manual no SignPath (até 1 h). Sem o
+# segredo, os arquivos saem sem assinatura, como antes. Configurações em .signpath/.
 name: Gerar executáveis
 
 on:
@@ -13,14 +18,87 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
+    env:
+      ASSINAR: ${{ secrets.SIGNPATH_API_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Executáveis, versão portátil e instalador
+      - name: Executáveis
         shell: pwsh
-        run: ./empacotar/gerar-windows.ps1
+        run: ./empacotar/gerar-windows.ps1 -Etapa exes
+      - name: Versão
+        id: versao
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path pyproject.toml -Pattern '^version = "(.+)"').Matches[0].Groups[1].Value
+          "versao=$v" >> $env:GITHUB_OUTPUT
+
+      # 1) assina os dois .exe antes de montar o .zip e o instalador (que os levam dentro)
+      - name: Enviar os .exe para assinar
+        if: env.ASSINAR == 'true'
+        id: exes
+        uses: actions/upload-artifact@v4
+        with:
+          name: exes-sem-assinatura
+          path: |
+            dist/PrintBridge.exe
+            dist/PrintBridge-servidor.exe
+      - name: Assinar os .exe (SignPath Foundation)
+        if: env.ASSINAR == 'true'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: printbridge
+          signing-policy-slug: release-signing
+          artifact-configuration-slug: executaveis
+          github-artifact-id: ${{ steps.exes.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: dist
+          parameters: |
+            version: ${{ toJSON(steps.versao.outputs.versao) }}
+
+      - name: Versão portátil e instalador
+        shell: pwsh
+        run: ./empacotar/gerar-windows.ps1 -Etapa pacotes
+
+      # 2) assina o instalador (com nome fixo, que a configuração do SignPath espera)
+      - name: Preparar o instalador para assinar
+        if: env.ASSINAR == 'true'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force assinar | Out-Null
+          Copy-Item "dist/PrintBridge-${{ steps.versao.outputs.versao }}-windows-instalador.exe" assinar/PrintBridge-instalador.exe
+      - name: Enviar o instalador para assinar
+        if: env.ASSINAR == 'true'
+        id: instalador
+        uses: actions/upload-artifact@v4
+        with:
+          name: instalador-sem-assinatura
+          path: assinar/PrintBridge-instalador.exe
+      - name: Assinar o instalador (SignPath Foundation)
+        if: env.ASSINAR == 'true'
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: printbridge
+          signing-policy-slug: release-signing
+          artifact-configuration-slug: instalador
+          github-artifact-id: ${{ steps.instalador.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: assinado
+          parameters: |
+            version: ${{ toJSON(steps.versao.outputs.versao) }}
+      - name: Instalador assinado no lugar do original
+        if: env.ASSINAR == 'true'
+        shell: pwsh
+        run: Copy-Item assinado/PrintBridge-instalador.exe "dist/PrintBridge-${{ steps.versao.outputs.versao }}-windows-instalador.exe" -Force
+
       - uses: actions/upload-artifact@v4
         with:
           name: windows
@@ -62,3 +140,5 @@ jobs:
         with:
           files: arquivos/*
           generate_release_notes: true
+          body: |
+            **Code signing policy:** os arquivos de Windows são gerados automaticamente a partir deste repositório e, com a assinatura ativa, assinados pelo SignPath Foundation — veja [CODE_SIGNING_POLICY.md](https://github.com/lazaroor/printbridge/blob/main/CODE_SIGNING_POLICY.md). Free code signing provided by SignPath.io, certificate by SignPath Foundation.
