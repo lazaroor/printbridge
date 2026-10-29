@@ -69,6 +69,11 @@
   .acoes { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px }
   .vazio { text-align: center; padding: 40px 16px }
   .pular { border-top: 1px solid var(--borda); margin-top: 12px; padding-top: 12px }
+  /* visualizador ampliado: o MESMO canvas numa janela grande (a cena e a câmera continuam) */
+  .mesa3d { position: relative }
+  .mesa3d.ampliado { position: fixed; inset: 3vh 3vw; z-index: 1000; border-radius: 12px; overflow: hidden; background: #eef2ee; box-shadow: 0 20px 60px rgba(0,0,0,.35) }
+  .mesa3d.ampliado canvas { height: 100% !important; border-radius: 0 !important }
+  .fundo-ampliado { position: fixed; inset: 0; background: rgba(10,16,12,.6); z-index: 999 }
   .aviso { background: var(--meio-fundo); color: var(--meio); border-radius: 8px; padding: 8px 10px; font-size: 13px; margin-top: 10px }
   .erro { background: var(--ruim-fundo); color: var(--ruim); border-radius: 8px; padding: 8px 10px; font-size: 13px; margin-top: 10px }
   .sucesso { background: var(--ok-fundo); color: var(--ok); border-radius: 8px; padding: 8px 10px; font-size: 13px; margin-top: 10px }
@@ -369,6 +374,9 @@ function abrirPular(p) {
 }
 function fecharPular() {
   if (!PULAR) return;
+  PULAR.fundoAmpliado?.remove();
+  if (PULAR.escAmpliado) removeEventListener("keydown", PULAR.escAmpliado, true);
+  document.body.style.overflow = "";
   PULAR.vivo = false;
   PULAR.cena?.destruir();
   PULAR = null;
@@ -411,6 +419,11 @@ function desenharPular(estado) {
     estado.dica.textContent = peca ? `${peca.nome}${posicao(peca, d) ? " (" + posicao(peca, d) + ")" : ""}${pul.has(peca.id) ? " · pulada" : estado.marcadas.has(peca.id) ? " · marcada" : " · clique para marcar"}` : "";
     estado.dica.style.display = peca ? "" : "none";
   }
+  if (estado.avisoAmpliado) {
+    const n = estado.marcadas.size, ampliado = estado.avisoAmpliado.parentElement?.classList.contains("ampliado");
+    estado.avisoAmpliado.textContent = `${n} peça${n === 1 ? "" : "s"} marcada${n === 1 ? "" : "s"} — feche para confirmar o pulo`;
+    estado.avisoAmpliado.style.display = ampliado && n ? "" : "none";
+  }
   estado.cena?.atualizar({ marcadas: estado.marcadas, pulados: pul, camadaAtual: estado.p.layer ?? null, sobre: estado.sobre });
 }
 // enquanto a prévia 3D não chega: o mapa da mesa visto de cima (retângulos do plate_N.json)
@@ -435,6 +448,28 @@ function mapa2d(estado, pul) {
     const tt = document.createElementNS(NS, "title"); tt.textContent = `${x.nome} (${posicao(x, d)})`; r.append(tt);
   }
   return [svg];
+}
+// ampliar / voltar: troca só a classe do quadro (o canvas é o mesmo; o three.js acompanha o tamanho)
+function alternarAmpliado(estado, caixa3d, botao) {
+  const fechar = () => alternarAmpliado(estado, caixa3d, botao);
+  if (!caixa3d.classList.contains("ampliado")) {
+    estado.fundoAmpliado = el("div", { class: "fundo-ampliado", onclick: fechar });
+    estado.escAmpliado = (e) => { if (e.key === "Escape") { e.stopPropagation(); fechar(); } };
+    document.body.append(estado.fundoAmpliado);
+    addEventListener("keydown", estado.escAmpliado, true);
+    caixa3d.classList.add("ampliado");
+    caixa3d.setAttribute("role", "dialog");
+    botao.textContent = "✕ Fechar";
+    document.body.style.overflow = "hidden";
+  } else {
+    estado.fundoAmpliado?.remove();
+    removeEventListener("keydown", estado.escAmpliado, true);
+    caixa3d.classList.remove("ampliado");
+    caixa3d.removeAttribute("role");
+    botao.textContent = "⤢ Ampliar";
+    document.body.style.overflow = "";
+  }
+  desenharPular(estado);
 }
 function textoProgresso(d) {
   if (!d.vista_pendente) return "";
@@ -468,14 +503,21 @@ async function montarPular(estado) {
       el("span", { style: "font-size:16px;font-weight:900;color:#e07a1f;line-height:1" }, "↓"),
       el("span", { style: "font-size:9px;font-weight:800;color:#e07a1f;line-height:1" }, "FRENTE"));
     estado.dica = el("div", { style: "position:absolute;bottom:8px;left:8px;background:rgba(22,33,28,.85);color:#fff;font-size:12.5px;font-weight:600;padding:4px 9px;border-radius:6px;pointer-events:none;display:none" });
-    partes.push(el("div", { style: "position:relative" }, canvas,
-      el("div", { style: "position:absolute;top:8px;left:8px;display:flex;gap:4px" },
+    const caixa3d = el("div", { class: "mesa3d" });  // posição no CSS: um style aqui venceria o "ampliado"
+    const marcadasAviso = el("div", { style: "position:absolute;top:40px;left:8px;background:#2fbf71;color:#fff;font-size:12.5px;font-weight:700;padding:4px 10px;border-radius:6px;pointer-events:none;display:none" });
+    estado.avisoAmpliado = marcadasAviso;
+    const ampliar = el("button", { class: "sec", style: "font-size:11px;padding:2px 6px;background:#fff;color:#18202a;font-weight:700", title: "Ver a mesa em tela grande",
+      onclick: () => alternarAmpliado(estado, caixa3d, ampliar) }, "⤢ Ampliar");
+    caixa3d.append(canvas,
+      el("div", { style: "position:absolute;top:8px;left:8px;display:flex;gap:4px;flex-wrap:wrap" },
         [["diagonal", "3D"], ["frente", "Frente"], ["lado", "Lado"], ["cima", "De cima"]].map(([k, tt]) =>
-          el("button", { class: "sec", style: "font-size:11px;padding:2px 6px;background:#fff;color:#18202a", onclick: () => estado.cena?.olhar(k) }, tt))),
+          el("button", { class: "sec", style: "font-size:11px;padding:2px 6px;background:#fff;color:#18202a", onclick: () => estado.cena?.olhar(k) }, tt)), ampliar),
+      marcadasAviso,
       el("div", { title: "A frente da mesa é o lado da tela da impressora", "aria-label": "Bússola: a seta aponta para a frente da mesa",
         style: "position:absolute;top:8px;right:8px;width:58px;height:58px;border-radius:999px;background:rgba(255,255,255,.92);border:1px solid #c9d3cb;display:grid;place-items:center;pointer-events:none" }, seta),
       estado.dica,
-      el("div", { style: "position:absolute;bottom:8px;right:8px;font-size:11px;color:#5d6875;background:rgba(255,255,255,.85);padding:2px 7px;border-radius:6px;pointer-events:none" }, "arraste para girar · role para aproximar")));
+      el("div", { style: "position:absolute;bottom:8px;right:8px;font-size:11px;color:#5d6875;background:rgba(255,255,255,.85);padding:2px 7px;border-radius:6px;pointer-events:none" }, "arraste para girar · role para aproximar"));
+    partes.push(caixa3d);
   } else {
     estado.mapa = el("div");  // só para quem não tem a prévia 3D (arquivo sem as paredes legíveis)
     partes.push(el("div", { class: "suave", style: "margin-bottom:6px" }, "Mapa da mesa visto de cima."), estado.mapa);

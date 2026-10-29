@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "printbridge"
-version = "0.2.1"
+version = "0.2.2"
 description = "Local network control for 3D printers of many brands (Bambu Lab, Creality, Klipper, Flashforge, Anycubic, Elegoo, Prusa) behind one interface"
 readme = "README.md"
 license = "Apache-2.0"

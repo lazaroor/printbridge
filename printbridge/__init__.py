@@ -13,7 +13,7 @@
     python -m printbridge           # o painel web (e a API REST), em http://localhost:8750
 """
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 from .descoberta import procurar
 from .frota import MARCAS, criar, ficha, testar
