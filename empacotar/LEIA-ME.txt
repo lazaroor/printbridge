@@ -1,0 +1,27 @@
+PrintBridge — controle local de impressoras 3D de várias marcas
+https://github.com/lazaroor/printbridge
+
+COMO TESTAR
+1. Dê dois cliques em PrintBridge.exe.
+   O painel abre no navegador (http://localhost:8750) e o PrintBridge fica no ícone ao
+   lado do relógio. Para fechar de vez: clique com o botão direito no ícone > Sair.
+2. Clique em "Adicionar impressora", escolha a marca e siga o passo a passo.
+   O computador precisa estar no mesmo Wi-Fi/rede da impressora.
+
+Na primeira vez, o Windows pode mostrar "O Windows protegeu o computador" (o programa ainda
+não é assinado digitalmente): clique em "Mais informações" > "Executar assim mesmo".
+O Firewall pode perguntar sobre redes: permita em "Redes privadas" para a busca de
+impressoras funcionar.
+
+PRINTBRIDGE-SERVIDOR.EXE (opcional)
+O mesmo servidor, sem ícone e sem abrir o navegador, com uma janela de console — para deixar
+rodando num computador da oficina. Com --rede, outros aparelhos da rede (tablet, celular,
+outro PC) abrem o painel em http://IP-DESTE-COMPUTADOR:8750/?token=TOKEN (o token aparece
+no console e em Configurações).
+
+ONDE FICAM OS DADOS
+%USERPROFILE%\.printbridge\config.json (impressoras, access codes e senhas — guarde com
+cuidado) e printbridge.log (registro, para quando algo não funcionar).
+
+Só a Bambu Lab foi testada em impressora real; as outras marcas, em simuladores. Se testar
+com a sua, conte como foi em https://github.com/lazaroor/printbridge/issues

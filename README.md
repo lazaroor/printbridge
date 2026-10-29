@@ -13,6 +13,23 @@ Dá para usar de três jeitos:
    impressora (ou todas) dentro de outra página.
 3. **API REST e biblioteca Python**: para quem quer montar a própria interface.
 
+## Baixar e testar (sem instalar Python)
+
+Em [Releases](https://github.com/lazaroor/printbridge/releases), baixe a versão mais nova:
+
+- **Windows, com instalador:** `PrintBridge-…-windows-instalador.exe`. Instala, cria atalho e,
+  se você quiser, abre junto com o Windows.
+- **Windows, portátil:** `PrintBridge-…-windows-portatil.zip`. Descompacte e dê dois cliques em
+  `PrintBridge.exe`.
+- **Linux / Raspberry Pi / mini PC:** `PrintBridge-…-linux-x64.tar.gz`, só o servidor; rode
+  `./printbridge-servidor --rede` e abra o painel de outro computador.
+
+O `PrintBridge.exe` abre o painel no navegador (`http://localhost:8750`) e fica no ícone ao lado
+do relógio (botão direito → Sair para fechar). O `PrintBridge-servidor.exe` é o mesmo servidor,
+com uma janela de console e sem abrir o navegador, para deixar rodando num computador da oficina.
+Na primeira vez, o Windows pode avisar que o programa não é assinado: “Mais informações” →
+“Executar assim mesmo”.
+
 ## Impressoras compatíveis
 
 | Marca | Modelos | O que a pessoa informa | Testado em impressora real |
@@ -161,6 +178,14 @@ p.command("pause")
 `printbridge.Gerenciador()` guarda as impressoras em disco e as mantém conectadas (é o que o
 painel usa). `printbridge.ficha("anycubic")` devolve o que pedir à pessoa e o passo a passo na
 tela da impressora. Veja também [examples/monitor.py](examples/monitor.py).
+
+## Gerar os executáveis
+
+- Windows: `powershell -File empacotar\gerar-windows.ps1` gera, em `dist\`, o `PrintBridge.exe`, o
+  `PrintBridge-servidor.exe`, a versão portátil (.zip) e o instalador (este, se o Inno Setup 6
+  estiver instalado).
+- Automático: ao criar uma tag `v*` no GitHub, o workflow `.github/workflows/release.yml` gera os
+  arquivos de Windows e de Linux e os publica em Releases.
 
 ## Contribuir
 

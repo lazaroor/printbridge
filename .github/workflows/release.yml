@@ -1,0 +1,64 @@
+# Gera os executáveis a cada versão: crie uma tag (git tag v0.2.0 && git push --tags) e os
+# arquivos aparecem em Releases. Também dá para rodar à mão em Actions → Gerar executáveis.
+name: Gerar executáveis
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Executáveis, versão portátil e instalador
+        shell: pwsh
+        run: ./empacotar/gerar-windows.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            dist/*.zip
+            dist/*-instalador.exe
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Servidor (sem janela) para Linux / mini PC
+        run: |
+          pip install paho-mqtt websocket-client pillow cryptography aiortc pyinstaller
+          pyinstaller --noconfirm --onefile --console --name printbridge-servidor \
+            --add-data "printbridge/web:printbridge/web" --paths . --collect-submodules printbridge \
+            empacotar/entrada_servidor.py
+          VERSAO=$(grep -m1 '^version' pyproject.toml | cut -d'"' -f2)
+          cp empacotar/LEIA-ME.txt dist/
+          tar -C dist -czf "dist/PrintBridge-$VERSAO-linux-x64.tar.gz" printbridge-servidor LEIA-ME.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*.tar.gz
+
+  publicar:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: arquivos
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: arquivos/*
+          generate_release_notes: true
