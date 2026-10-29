@@ -12,8 +12,10 @@ e lemos do .gcode.3mf:
 O cartão da Bambu entrega só ~0,1 MB/s durante a impressão e não aceita ler a partir do meio
 (REST): um arquivo de 19 MB leva uns 3 minutos. Para não esperar tudo isso, o arquivo é lido
 ENQUANTO chega: plate_N.json e as configurações vêm logo no começo, e a primeira camada do
-G-code (onde todas as peças aparecem com o seu número) logo depois — com isso a lista sai em
-segundos (ao_parcial). O mesmo download segue até o fim para a prévia 3D e os nomes oficiais.
+G-code (onde todas as peças aparecem com o seu número) logo depois — com isso a lista e o 3D
+das primeiras camadas saem em segundos (ao_parcial). O G-code vem de baixo para cima, então a
+prévia 3D vai "crescendo" (novo ao_parcial a cada ~20 s) até o arquivo terminar, quando chegam
+também os nomes oficiais.
 Uma cópia do resultado fica em disco: reimprimir o mesmo arquivo não baixa de novo.
 """
 
@@ -22,6 +24,7 @@ import io
 import json
 import re
 import struct
+import threading
 import time
 import zipfile
 import zlib
@@ -120,6 +123,7 @@ class _LeitorEmAndamento:
         self.pequenos: dict[str, bytes] = {}
         self.placa = None
         self.camada1: _PrimeiraCamada | None = None
+        self.gcode: bytearray | None = None  # G-code da placa em impressão, até onde já chegou
         self.parado = False
 
     def alimentar(self, bloco: bytes) -> None:
@@ -150,6 +154,7 @@ class _LeitorEmAndamento:
                 if m and self.camada1 is None:
                     self.entrada["gcode"] = int(m.group(1))
                     self.entrada["camada"] = _PrimeiraCamada()
+                    self.entrada["texto"] = bytearray()  # o G-code até aqui: vira o 3D parcial
             e = self.entrada
             if e["metodo"] == 8:
                 novo = bytes(self.buf[e["alimentado"]:])
@@ -178,18 +183,21 @@ class _LeitorEmAndamento:
     def _usar(self, e: dict, saida: bytes) -> None:
         if re.fullmatch(r"Metadata/(plate_\d+\.json|project_settings\.config)", e["nome"]):
             e["dados"] += saida
+        if e.get("texto") is not None:
+            e["texto"] += saida
         c = e.get("camada")
         if c is not None and not c.pronta:
             c.alimentar(saida)
             if c.camadas is not None and self.camadas_impressao and c.camadas != self.camadas_impressao:
-                e["camada"] = None  # é outra placa do projeto: segue para a próxima
+                e["camada"] = e["texto"] = None  # é outra placa do projeto: segue para a próxima
             elif c.pronta:
-                self.camada1, self.placa = c, e["gcode"]
-                self.parado = True  # o resto só interessa à leitura completa, no fim
+                self.camada1, self.placa, self.gcode = c, e["gcode"], e["texto"]
 
     def _fechar(self, e: dict, fim: int) -> None:
         if e["dados"]:
             self.pequenos[e["nome"]] = bytes(e["dados"])
+        if self.gcode is not None and e.get("texto") is self.gcode:
+            self.parado = True  # o G-code da placa acabou: o resto só interessa à leitura completa
         # pula o descritor (16 bytes; 24 em zip64) até o próximo cabeçalho
         for tam in (16, 24, 12, 20, 0):
             if self.buf[fim + tam:fim + tam + 2] == b"PK" or len(self.buf) < fim + tam + 2:
@@ -222,7 +230,16 @@ class _LeitorEmAndamento:
                 p["caixa"] = [round(float(v), 1) for v in cx["bbox"][:4]]
             pecas.append(p)
         return {"arquivo": nome, "placa": self.placa, "marcado": True, "mesa": _mesa(proj), "camadas": c.camadas,
-                "pecas": pecas[:200], "vista": {}, "vista_pendente": True}
+                "pecas": pecas[:200], "vista": self.vista_parcial(), "vista_pendente": True}
+
+    def vista_parcial(self) -> dict:
+        """Prévia 3D das camadas que já chegaram (o G-code vem de baixo para cima)."""
+        if not self.gcode:
+            return {}
+        try:
+            return trajetos.extrair(bytes(self.gcode))
+        except Exception:
+            return {}
 
 
 def _completo(conteudo: bytes, nome: str, camadas_impressao) -> dict:
@@ -321,22 +338,51 @@ def ler(ip: str, access_code: str, nome_arquivo: str, camadas_impressao: int | N
                 except (OSError, ValueError):
                     pass
             leitor = _LeitorEmAndamento(camadas_impressao)
-            avisou = False
+            rapido = None
+            ultimo = 0.0
+            trava = threading.Lock()   # o 3D parcial é montado numa thread: não atrasa o download
+            acabou = threading.Event()  # e nunca é entregue depois do resultado completo
+
+            def entregar_parcial() -> None:
+                if not trava.acquire(blocking=False):
+                    return
+                try:
+                    if acabou.is_set():
+                        return
+                    parcial = {**rapido, "vista": leitor.vista_parcial(),
+                               "recebido": round(100 * len(leitor.buf) / max(1, tamanho))}
+                    if not acabou.is_set():
+                        ao_parcial(parcial)
+                except Exception as e:
+                    print(f"pular peças (parcial): {e!r}")
+                finally:
+                    trava.release()
 
             def chegou(bloco: bytes) -> None:
-                nonlocal avisou
+                nonlocal rapido, ultimo
                 leitor.alimentar(bloco)
-                if not avisou and leitor.camada1 is not None and ao_parcial:
-                    avisou = True
+                if not ao_parcial or leitor.camada1 is None or acabou.is_set():
+                    return
+                if rapido is None:
                     rapido = leitor.resultado_rapido(nome)
                     if rapido:
+                        ultimo = time.time()
+                        rapido["recebido"] = round(100 * len(leitor.buf) / max(1, tamanho))
                         try:
                             ao_parcial(rapido)
                         except Exception as e:
                             print(f"pular peças (lista rápida): {e!r}")
+                elif time.time() - ultimo > 20 and not leitor.parado:  # o 3D vai crescendo
+                    ultimo = time.time()
+                    threading.Thread(target=entregar_parcial, daemon=True).start()
 
             inicio = time.time()
-            ftp.retrbinary(f"RETR {caminho}", chegou, blocksize=64 * 1024)
+            try:
+                ftp.retrbinary(f"RETR {caminho}", chegou, blocksize=64 * 1024)
+            finally:
+                acabou.set()
+            with trava:  # espera um 3D parcial que esteja sendo entregue
+                pass
             dados = _completo(bytes(leitor.buf), nome, camadas_impressao)
             dados["segundos"] = round(time.time() - inicio)
             if cache:

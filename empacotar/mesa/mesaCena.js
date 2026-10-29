@@ -86,38 +86,55 @@ export function criarMesa(canvas, { mesa = [256, 256], vista, aoClicar, aoPassar
   placa.rotation.x = -Math.PI / 2;
   cena.add(placa);
 
-  // peças: um par de LineSegments por peça (impresso / ainda não) + caixa invisível para o clique
-  const pecas = new Map(); // id → { feito, falta, caixa, linhas }
+  // peças: um par de LineSegments por peça (impresso / ainda não) + caixa invisível para o clique.
+  // Enquanto o arquivo ainda vem do cartão, a vista chega aos poucos (de baixo para cima):
+  // atualizarVista() troca as peças sem mexer na câmera de quem está olhando.
+  let pecas = new Map(); // id → { feito, falta, caixa, linhas }
+  let caixas = [], linhas = [];
   let altura = 10;
   const centro = new THREE.Vector3();
-  const tudo = new THREE.Box3();
-  for (const [id, linhas] of Object.entries(vista?.pecas || {})) {
-    const caixa3 = new THREE.Box3();
-    for (const [, z, xy] of linhas) {
-      for (let i = 0; i < xy.length; i += 2) caixa3.expandByPoint(new THREE.Vector3(xy[i] / 10 - W / 2, z, H / 2 - xy[i + 1] / 10));
-    }
-    if (caixa3.isEmpty()) continue;
-    tudo.union(caixa3);
-    altura = Math.max(altura, caixa3.max.y);
-    const feito = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: COR.peca }));
-    const falta = new THREE.LineSegments(new THREE.BufferGeometry(),
-      new THREE.LineBasicMaterial({ color: COR.peca, transparent: true, opacity: 0.22, depthWrite: false }));
-    const tam = caixa3.getSize(new THREE.Vector3()).max(new THREE.Vector3(2, 2, 2));
-    const caixa = new THREE.Mesh(new THREE.BoxGeometry(tam.x, tam.y, tam.z),
-      new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
-    caixa3.getCenter(caixa.position);
-    caixa.userData.id = Number(id);
-    cena.add(feito, falta, caixa);
-    pecas.set(Number(id), { feito, falta, caixa, linhas });
-  }
-  // enquadra as peças (não a mesa inteira): numa A1 com 5 peças no meio, a mesa toda as deixaria minúsculas
   let alcance = Math.max(W, H) * 0.6;
-  if (!tudo.isEmpty()) {
-    tudo.getCenter(centro);
-    const t = tudo.getSize(new THREE.Vector3());
-    alcance = Math.min(Math.max(W, H) * 0.6, Math.max(45, t.x, t.y, t.z) * 0.95);
+  let enquadrado = false;
+  function montarPecas(v) {
+    for (const p of pecas.values()) {
+      cena.remove(p.feito, p.falta, p.caixa);
+      p.feito.geometry.dispose(); p.falta.geometry.dispose(); p.caixa.geometry.dispose();
+      p.feito.material.dispose(); p.falta.material.dispose(); p.caixa.material.dispose();
+    }
+    pecas = new Map();
+    const tudo = new THREE.Box3();
+    for (const [id, ls] of Object.entries(v?.pecas || {})) {
+      const caixa3 = new THREE.Box3();
+      for (const [, z, xy] of ls) {
+        for (let i = 0; i < xy.length; i += 2) caixa3.expandByPoint(new THREE.Vector3(xy[i] / 10 - W / 2, z, H / 2 - xy[i + 1] / 10));
+      }
+      if (caixa3.isEmpty()) continue;
+      tudo.union(caixa3);
+      altura = Math.max(altura, caixa3.max.y);
+      const feito = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: COR.peca }));
+      const falta = new THREE.LineSegments(new THREE.BufferGeometry(),
+        new THREE.LineBasicMaterial({ color: COR.peca, transparent: true, opacity: 0.22, depthWrite: false }));
+      const tam = caixa3.getSize(new THREE.Vector3()).max(new THREE.Vector3(2, 2, 2));
+      const caixa = new THREE.Mesh(new THREE.BoxGeometry(tam.x, tam.y, tam.z),
+        new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+      caixa3.getCenter(caixa.position);
+      caixa.userData.id = feito.userData.id = falta.userData.id = Number(id);
+      cena.add(feito, falta, caixa);
+      pecas.set(Number(id), { feito, falta, caixa, linhas: ls });
+    }
+    caixas = [...pecas.values()].map((x) => x.caixa);
+    linhas = [...pecas.values()].flatMap((x) => [x.feito, x.falta]);
+    // enquadra as peças (não a mesa inteira): numa A1 com 5 peças no meio, a mesa toda as deixaria
+    // minúsculas. Só na primeira vez: depois a câmera é de quem está olhando.
+    if (!enquadrado && !tudo.isEmpty()) {
+      tudo.getCenter(centro);
+      const t = tudo.getSize(new THREE.Vector3());
+      alcance = Math.min(Math.max(W, H) * 0.6, Math.max(45, t.x, t.y, t.z) * 0.95);
+      centro.y = altura * 0.4;
+      enquadrado = true;
+    }
   }
-  centro.y = altura * 0.4;
+  montarPecas(vista);
 
   const separar = (linhas, camadaAtual) => {
     const sim = [], nao = [];
@@ -130,8 +147,15 @@ export function criarMesa(canvas, { mesa = [256, 256], vista, aoClicar, aoPassar
     return [sim, nao];
   };
 
-  let camadaFeita;
-  function atualizar({ marcadas = new Set(), pulados = new Set(), camadaAtual = null, sobre = null } = {}) {
+  let camadaFeita, ultimoEstado = {};
+  function atualizarVista(v) {
+    montarPecas(v);
+    camadaFeita = Symbol("refazer"); // força remontar o "já impresso / ainda não" de todas
+    atualizar(ultimoEstado);
+  }
+  function atualizar(estado = {}) {
+    ultimoEstado = estado;
+    const { marcadas = new Set(), pulados = new Set(), camadaAtual = null, sobre = null } = estado;
     for (const [id, p] of pecas) {
       if (camadaAtual !== camadaFeita) {
         const [sim, nao] = separar(p.linhas, camadaAtual);
@@ -159,12 +183,6 @@ export function criarMesa(canvas, { mesa = [256, 256], vista, aoClicar, aoPassar
   // clique x arrastar: só conta como clique se o mouse quase não andou
   const raio = new THREE.Raycaster();
   const ponteiro = new THREE.Vector2();
-  const caixas = [...pecas.values()].map((p) => p.caixa);
-  const linhas = [];
-  for (const [id, p] of pecas) {
-    p.feito.userData.id = p.falta.userData.id = id;
-    linhas.push(p.feito, p.falta);
-  }
   const acertar = (ev) => {
     const r = canvas.getBoundingClientRect();
     ponteiro.set(((ev.clientX - r.left) / r.width) * 2 - 1, -((ev.clientY - r.top) / r.height) * 2 + 1);
@@ -239,6 +257,7 @@ export function criarMesa(canvas, { mesa = [256, 256], vista, aoClicar, aoPassar
 
   return {
     atualizar,
+    atualizarVista,
     olhar,
     destruir() {
       cancelAnimationFrame(quadro);

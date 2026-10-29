@@ -68,8 +68,6 @@
   .temp button { padding: 3px 8px; font-size: 12px }
   .acoes { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px }
   .vazio { text-align: center; padding: 40px 16px }
-  .cartao.com-pular { grid-column: 1 / -1 }  /* com o Pular peças aberto, o cartão ocupa a linha toda */
-  .cartao.com-pular .camera { aspect-ratio: auto; height: 240px }  /* sem isso, a câmera na largura toda empurra o painel */
   .pular { border-top: 1px solid var(--borda); margin-top: 12px; padding-top: 12px }
   .aviso { background: var(--meio-fundo); color: var(--meio); border-radius: 8px; padding: 8px 10px; font-size: 13px; margin-top: 10px }
   .erro { background: var(--ruim-fundo); color: var(--ruim); border-radius: 8px; padding: 8px 10px; font-size: 13px; margin-top: 10px }
@@ -385,8 +383,15 @@ async function esperarPecas(estado) {
     if (d.estado !== "pronto") return estado.corpo.replaceChildren(el("div", { class: d.estado === "erro" ? "erro" : "aviso", style: "margin-top:0" },
       d.estado === "erro" ? maiuscula(d.erro) : d.estado === "sem_impressao" ? "A impressora não está imprimindo agora." : "Pular peças ainda é só para Bambu Lab."));
     const tinha3d = Object.keys(estado.dados?.vista?.pecas || {}).length > 0;
+    // chegaram mais camadas (ou o 3D completo): a cada consulta vem um objeto novo, então compara o conteúdo
+    const vistaNova = d.vista?.camadas_total !== estado.dados?.vista?.camadas_total || d.vista_pendente !== estado.dados?.vista_pendente;
     estado.dados = d;
-    if (!estado.lista || (!tinha3d && Object.keys(d.vista?.pecas || {}).length)) montarPular(estado); else desenharPular(estado);
+    if (!estado.lista || (!tinha3d && Object.keys(d.vista?.pecas || {}).length)) montarPular(estado);
+    else {
+      if (vistaNova && estado.cena) estado.cena.atualizarVista(d.vista);  // o 3D cresce sem mexer na câmera
+      if (estado.progresso) estado.progresso.textContent = textoProgresso(d);
+      desenharPular(estado);
+    }
     if (d.vista_pendente) setTimeout(() => esperarPecas(estado), 4000);  // a prévia 3D ainda vem do cartão
   } catch (e) { if (estado.vivo) estado.corpo.replaceChildren(el("div", { class: "erro", style: "margin-top:0" }, maiuscula(e.message))); }
 }
@@ -431,11 +436,18 @@ function mapa2d(estado, pul) {
   }
   return [svg];
 }
+function textoProgresso(d) {
+  if (!d.vista_pendente) return "";
+  return Object.keys(d.vista?.pecas || {}).length
+    ? `Completando a prévia 3D: até a camada ${d.vista?.camadas_total ?? "?"} de ${d.camadas ?? "?"}${d.recebido != null ? ` (${d.recebido}% do arquivo)` : ""} — já dá para marcar.`
+    : "Lendo o arquivo no cartão da impressora…";
+}
 async function montarPular(estado) {
   const d = estado.dados;
   estado.cena?.destruir(); estado.cena = null; estado.mapa = null; estado.dica = null;
   const tem3d = Object.keys(d.vista?.pecas || {}).length > 0;
-  estado.lista = el("div", { style: "display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:4px;font-size:13px;margin-top:10px" });
+  estado.lista = el("div", { style: "display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:3px 8px;font-size:12.5px;margin-top:8px;max-height:170px;overflow-y:auto;padding-right:4px" });
+  estado.progresso = el("div", { class: "suave", style: "font-size:12px;margin:0 0 6px" }, textoProgresso(d));
   estado.msg = el("div");
   estado.botao = el("button", { class: "perigo", style: "margin-top:12px", onclick: async () => {
     const nomes = d.pecas.filter((x) => estado.marcadas.has(x.id)).map((x) => x.nome);
@@ -450,7 +462,7 @@ async function montarPular(estado) {
   const partes = [!d.marcado && el("div", { class: "aviso", style: "margin-top:0" }, "Este arquivo foi fatiado sem “identificar objetos” — a impressora pode não conseguir pular. No Bambu Studio, ligue Label objects (Processo → Outros).")];
   let canvas, seta;
   if (tem3d) {
-    canvas = el("canvas", { style: "width:100%;height:380px;display:block;border-radius:8px;touch-action:none", "aria-label": "Prévia 3D da mesa: clique numa peça para marcar" });
+    canvas = el("canvas", { style: "width:100%;height:300px;display:block;border-radius:8px;touch-action:none", "aria-label": "Prévia 3D da mesa: clique numa peça para marcar" });
     seta = el("div", { style: "display:flex;flex-direction:column;align-items:center;transition:transform .1s" },
       el("span", { style: "font-size:9px;font-weight:800;color:#5d6875;line-height:1" }, "FUNDO"),
       el("span", { style: "font-size:16px;font-weight:900;color:#e07a1f;line-height:1" }, "↓"),
@@ -459,18 +471,16 @@ async function montarPular(estado) {
     partes.push(el("div", { style: "position:relative" }, canvas,
       el("div", { style: "position:absolute;top:8px;left:8px;display:flex;gap:4px" },
         [["diagonal", "3D"], ["frente", "Frente"], ["lado", "Lado"], ["cima", "De cima"]].map(([k, tt]) =>
-          el("button", { class: "sec", style: "font-size:11.5px;padding:3px 8px;background:#fff;color:#18202a", onclick: () => estado.cena?.olhar(k) }, tt))),
+          el("button", { class: "sec", style: "font-size:11px;padding:2px 6px;background:#fff;color:#18202a", onclick: () => estado.cena?.olhar(k) }, tt))),
       el("div", { title: "A frente da mesa é o lado da tela da impressora", "aria-label": "Bússola: a seta aponta para a frente da mesa",
         style: "position:absolute;top:8px;right:8px;width:58px;height:58px;border-radius:999px;background:rgba(255,255,255,.92);border:1px solid #c9d3cb;display:grid;place-items:center;pointer-events:none" }, seta),
       estado.dica,
       el("div", { style: "position:absolute;bottom:8px;right:8px;font-size:11px;color:#5d6875;background:rgba(255,255,255,.85);padding:2px 7px;border-radius:6px;pointer-events:none" }, "arraste para girar · role para aproximar")));
   } else {
-    estado.mapa = el("div");
-    partes.push(el("div", { class: "suave", style: "margin-bottom:6px" }, d.vista_pendente
-      ? "Prévia 3D chegando — o arquivo ainda está vindo do cartão (uns minutos em placas grandes). Já dá para marcar pelo mapa ou pela lista."
-      : "Mapa da mesa visto de cima."), estado.mapa);
+    estado.mapa = el("div");  // só para quem não tem a prévia 3D (arquivo sem as paredes legíveis)
+    partes.push(el("div", { class: "suave", style: "margin-bottom:6px" }, "Mapa da mesa visto de cima."), estado.mapa);
   }
-  estado.corpo.replaceChildren(...[...partes, estado.lista, estado.msg, estado.botao].filter(Boolean));  // replaceChildren escreveria "false"
+  estado.corpo.replaceChildren(...[estado.progresso, ...partes, estado.lista, estado.msg, estado.botao].filter(Boolean));  // replaceChildren escreveria "false"
   desenharPular(estado);
   if (!tem3d) return;
   try {
